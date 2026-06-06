@@ -1,0 +1,95 @@
+{
+  "brand_name": "FORM",
+  "theme": "dark",
+  "archetype": "Archetype 5 (Luxury & Hardware)",
+  "colors": {
+    "background": "#09090B",
+    "surface": "rgba(255, 255, 255, 0.03)",
+    "surface_hover": "rgba(255, 255, 255, 0.06)",
+    "border": "rgba(255, 255, 255, 0.08)",
+    "border_highlight": "rgba(255, 255, 255, 0.15)",
+    "primary": "#FF4F00",
+    "primary_hover": "#CC3F00",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "text_muted": "#52525B",
+    "success": "#10B981",
+    "error": "#EF4444"
+  },
+  "typography": {
+    "heading_font": "Clash Display",
+    "body_font": "Satoshi",
+    "mono_font": "JetBrains Mono",
+    "h1": "text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tighter",
+    "h2": "text-2xl sm:text-3xl lg:text-4xl font-medium tracking-tight",
+    "h3": "text-xl sm:text-2xl font-medium tracking-tight",
+    "body": "text-base font-normal leading-relaxed text-[#A1A1AA]",
+    "label": "text-xs font-semibold uppercase tracking-[0.2em] text-[#A1A1AA]"
+  },
+  "spacing_and_layout": {
+    "general": "Generous spacing. Use p-8 to p-12 for sections. Container margins must be substantial.",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8",
+    "control_room_grid": "grid grid-cols-1 lg:grid-cols-12 gap-6",
+    "radius": "rounded-2xl for major cards, rounded-lg for inner elements. Avoid sharp corners."
+  },
+  "surfaces": {
+    "crystal_glass": "bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+    "solid_dark": "bg-[#09090B] border border-white/[0.08]",
+    "interactive_glass": "bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] hover:bg-white/[0.06] hover:border-white/[0.15] transition-all duration-300"
+  },
+  "components": {
+    "header": "Sticky with crystal_glass. Must have logo, navigation links, and a primary CTA. Never completely transparent.",
+    "buttons": {
+      "primary": "bg-[#FF4F00] text-white font-medium px-6 py-3 rounded-lg hover:bg-[#CC3F00] transition-colors shadow-[0_0_20px_rgba(255,79,0,0.3)] hover:shadow-[0_0_30px_rgba(255,79,0,0.5)]",
+      "secondary": "bg-white/[0.05] text-white border border-white/[0.1] px-6 py-3 rounded-lg hover:bg-white/[0.1] transition-colors"
+    },
+    "customizer": {
+      "canvas_container": "col-span-12 lg:col-span-8 bg-[#050505] rounded-2xl border border-white/[0.05] overflow-hidden relative flex items-center justify-center min-h-[60vh]",
+      "controls_sidebar": "col-span-12 lg:col-span-4 crystal_glass p-6 rounded-2xl flex flex-col gap-6 h-full"
+    },
+    "checkout_form": "Use Shadcn components customized with interactive_glass. Focus ring must be ring-1 ring-[#FF4F00] border-transparent.",
+    "admin_dashboard": "Control Room Grid. Denser spacing (p-4 to p-6). Less blur, more solid dark backgrounds to ensure data readability. Tables must have clear 1px borders (border-white/[0.05])."
+  },
+  "animations": {
+    "hover": "Scale 1.02 on interactive cards. Smooth color transitions (duration 300ms ease-out).",
+    "page_load": "Staggered fade-up for bento grid items using framer-motion.",
+    "marquee": "Slow, smooth drift for supported brands using react-fast-marquee. Text style: uppercase, mono_font, text-white/30."
+  },
+  "image_urls": [
+    {
+      "category": "hero_background",
+      "url": "https://images.pexels.com/photos/9807251/pexels-photo-9807251.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Abstract misty dark glass texture for immersive landing page hero background."
+    },
+    {
+      "category": "hero_device",
+      "url": "https://images.unsplash.com/photo-1423784346385-c1d4dac9893a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxzbWFydHBob25lJTIwZGFya3xlbnwwfHx8fDE3ODA3NDIzODB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Silhouette of person holding smartphone, to be used in hero section overlay."
+    },
+    {
+      "category": "lifestyle_1",
+      "url": "https://images.pexels.com/photos/11989314/pexels-photo-11989314.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Person holding phone indoors, showcasing everyday use."
+    },
+    {
+      "category": "lifestyle_2",
+      "url": "https://images.unsplash.com/photo-1592890288564-76628a30a657?crop=entropy&cs=srgb&fm=jpg",
+      "description": "Close up person holding black smartphone, sleek and modern."
+    }
+  ],
+  "testing": {
+    "attributes": "All interactive and key informational elements MUST include a 'data-testid' attribute in kebab-case based on their role (e.g., data-testid='checkout-submit-button', data-testid='customizer-upload-image')."
+  },
+  "instructions_to_main_agent": [
+    "Build the application using pure HTML+Tailwind for layout wrappers, and highly customized Shadcn components for interactive logic (.js/.jsx files).",
+    "Implement a dark luxury theme matching Archetype 5. DO NOT use generic Inter/Roboto fonts. Setup Clash Display for headings and Satoshi for body.",
+    "The Hero Section MUST use the 'hero_background' image with a bg-black/40 overlay. Do NOT use heavy opaque layers that hide the image.",
+    "Fabric.js customizer must be large, precise, and wrapped in a 12-column grid (Canvas 8 cols, Sidebar 4 cols).",
+    "Inputs and cards must use the 'crystal_glass' or 'interactive_glass' tailwind definitions.",
+    "Use Phosphor Icons (@phosphor-icons/react) for a premium hardware feel.",
+    "Never use purple or teal for accents; stick strictly to the primary #FF4F00 (Orange/Amber) and monochromatic scales.",
+    "Include 'data-testid' on ALL buttons, links, inputs, and major sections.",
+    "Implement an admin dashboard with a denser layout, maintaining the dark theme but prioritizing data visibility.",
+    "Ensure the UPI payment screen explicitly instructs users to upload a screenshot and UTR number, styling the manual upload like a premium feature."
+  ]
+}
