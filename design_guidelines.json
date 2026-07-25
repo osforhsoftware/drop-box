@@ -1,18 +1,22 @@
 {
-  "brand_name": "FORM",
+  "brand_name": "CASEBOX",
   "theme": "dark",
   "archetype": "Archetype 5 (Luxury & Hardware)",
   "colors": {
-    "background": "#09090B",
-    "surface": "rgba(255, 255, 255, 0.03)",
-    "surface_hover": "rgba(255, 255, 255, 0.06)",
-    "border": "rgba(255, 255, 255, 0.08)",
-    "border_highlight": "rgba(255, 255, 255, 0.15)",
-    "primary": "#FF4F00",
-    "primary_hover": "#CC3F00",
+    "background": "#0D0D0D",
+    "background_alt": "#141414",
+    "background_elevated": "#1B1B1B",
+    "surface": "#222222",
+    "surface_hover": "#2A2A2A",
+    "border": "rgba(109, 177, 97, 0.18)",
+    "border_highlight": "rgba(109, 177, 97, 0.28)",
+    "primary": "#6DB161",
+    "secondary": "#84CC47",
+    "accent": "#6ADC54",
+    "primary_hover": "#84CC47",
     "text_primary": "#FFFFFF",
-    "text_secondary": "#A1A1AA",
-    "text_muted": "#52525B",
+    "text_secondary": "#D6D6D6",
+    "text_muted": "#A0A0A0",
     "success": "#10B981",
     "error": "#EF4444"
   },
@@ -23,8 +27,8 @@
     "h1": "text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tighter",
     "h2": "text-2xl sm:text-3xl lg:text-4xl font-medium tracking-tight",
     "h3": "text-xl sm:text-2xl font-medium tracking-tight",
-    "body": "text-base font-normal leading-relaxed text-[#A1A1AA]",
-    "label": "text-xs font-semibold uppercase tracking-[0.2em] text-[#A1A1AA]"
+    "body": "text-base font-normal leading-relaxed text-[#D6D6D6]",
+    "label": "text-xs font-semibold uppercase tracking-[0.2em] text-[#84CC47]"
   },
   "spacing_and_layout": {
     "general": "Generous spacing. Use p-8 to p-12 for sections. Container margins must be substantial.",
@@ -33,25 +37,26 @@
     "radius": "rounded-2xl for major cards, rounded-lg for inner elements. Avoid sharp corners."
   },
   "surfaces": {
-    "crystal_glass": "bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
-    "solid_dark": "bg-[#09090B] border border-white/[0.08]",
-    "interactive_glass": "bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] hover:bg-white/[0.06] hover:border-white/[0.15] transition-all duration-300"
+    "crystal_glass": "bg-[#222222]/85 backdrop-blur-2xl border border-[rgba(109,177,97,0.12)] shadow-[0_5px_20px_rgba(109,177,97,0.15)]",
+    "solid_dark": "bg-[#0D0D0D] border border-[rgba(109,177,97,0.18)]",
+    "interactive_glass": "bg-[#222222]/70 backdrop-blur-xl border border-[rgba(109,177,97,0.12)] hover:bg-[#2A2A2A]/90 hover:border-[rgba(109,177,97,0.22)] transition-all duration-300",
+    "card_premium": "bg-gradient-to-b from-[#1A1A1A] to-[#242424] border border-[rgba(109,177,97,0.15)] hover:-translate-y-2 hover:shadow-[0_20px_50px_rgba(109,177,97,0.18)] transition-all duration-300"
   },
   "components": {
-    "header": "Sticky with crystal_glass. Must have logo, navigation links, and a primary CTA. Never completely transparent.",
+    "header": "Sticky with crystal_glass. Green-tinted border. Nav hover #84CC47, active #6DB161.",
     "buttons": {
-      "primary": "bg-[#FF4F00] text-white font-medium px-6 py-3 rounded-lg hover:bg-[#CC3F00] transition-colors shadow-[0_0_20px_rgba(255,79,0,0.3)] hover:shadow-[0_0_30px_rgba(255,79,0,0.5)]",
-      "secondary": "bg-white/[0.05] text-white border border-white/[0.1] px-6 py-3 rounded-lg hover:bg-white/[0.1] transition-colors"
+      "primary": "bg-gradient-to-br from-[#6DB161] via-[#84CC47] to-[#6ADC54] text-white font-medium px-6 py-3 rounded-[14px] hover:from-[#84CC47] hover:via-[#6ADC54] hover:to-[#6DB161] transition-all duration-300 shadow-[0_10px_30px_rgba(109,177,97,0.35)] hover:scale-[1.03] hover:-translate-y-0.5",
+      "secondary": "bg-transparent text-[#84CC47] border-2 border-[#6DB161] px-6 py-3 rounded-[14px] hover:bg-[rgba(109,177,97,0.12)] transition-all duration-300"
     },
     "customizer": {
-      "canvas_container": "col-span-12 lg:col-span-8 bg-[#050505] rounded-2xl border border-white/[0.05] overflow-hidden relative flex items-center justify-center min-h-[60vh]",
+      "canvas_container": "col-span-12 lg:col-span-8 bg-[#0D0D0D] rounded-2xl border border-[rgba(109,177,97,0.12)] overflow-hidden relative flex items-center justify-center min-h-[60vh]",
       "controls_sidebar": "col-span-12 lg:col-span-4 crystal_glass p-6 rounded-2xl flex flex-col gap-6 h-full"
     },
-    "checkout_form": "Use Shadcn components customized with interactive_glass. Focus ring must be ring-1 ring-[#FF4F00] border-transparent.",
-    "admin_dashboard": "Control Room Grid. Denser spacing (p-4 to p-6). Less blur, more solid dark backgrounds to ensure data readability. Tables must have clear 1px borders (border-white/[0.05])."
+    "checkout_form": "Use Shadcn components customized with interactive_glass. Focus ring: border #84CC47, glow 0 0 0 4px rgba(132,204,71,0.15).",
+    "admin_dashboard": "Control Room Grid. Denser spacing (p-4 to p-6). Less blur, more solid dark backgrounds to ensure data readability. Tables must have clear 1px borders (border-[rgba(109,177,97,0.12)])."
   },
   "animations": {
-    "hover": "Scale 1.02 on interactive cards. Smooth color transitions (duration 300ms ease-out).",
+    "hover": "Scale 1.02–1.03 on interactive cards. Smooth color transitions (duration 300ms ease). Green glow on hover.",
     "page_load": "Staggered fade-up for bento grid items using framer-motion.",
     "marquee": "Slow, smooth drift for supported brands using react-fast-marquee. Text style: uppercase, mono_font, text-white/30."
   },
@@ -87,7 +92,7 @@
     "Fabric.js customizer must be large, precise, and wrapped in a 12-column grid (Canvas 8 cols, Sidebar 4 cols).",
     "Inputs and cards must use the 'crystal_glass' or 'interactive_glass' tailwind definitions.",
     "Use Phosphor Icons (@phosphor-icons/react) for a premium hardware feel.",
-    "Never use purple or teal for accents; stick strictly to the primary #FF4F00 (Orange/Amber) and monochromatic scales.",
+    "Use the premium green palette: primary #6DB161, secondary #84CC47, accent #6ADC54. Never use orange, pink, or purple for UI accents.",
     "Include 'data-testid' on ALL buttons, links, inputs, and major sections.",
     "Implement an admin dashboard with a denser layout, maintaining the dark theme but prioritizing data visibility.",
     "Ensure the UPI payment screen explicitly instructs users to upload a screenshot and UTR number, styling the manual upload like a premium feature."

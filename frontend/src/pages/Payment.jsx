@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
-import { api } from "../lib/api";
+import { api, resolveMediaUrl } from "../lib/api";
 import { clearDraft } from "../lib/draft";
 import { useDropzone } from "react-dropzone";
 import { Check, Copy, Upload, MessageCircle } from "lucide-react";
+import { SHIPPING_FEE } from "../constants/shipping";
 
 export default function Payment() {
   const { orderId } = useParams();
@@ -66,8 +67,16 @@ export default function Payment() {
     <div data-testid="payment-page" className="max-w-6xl mx-auto px-6 lg:px-10 py-12">
       <div className="label-eyebrow">Payment</div>
       <h1 className="font-display text-4xl lg:text-5xl mt-3 mb-2">Pay ₹{order.amount} via UPI</h1>
+      <div className="text-sm text-white/60 mb-2 space-y-0.5">
+        <div>Subtotal ₹{order.subtotal} · Shipping ₹{order.shipping_fee ?? SHIPPING_FEE}</div>
+        {order.promo_code && (
+          <div>
+            Promo <span className="font-mono text-brand">{order.promo_code}</span> (−₹{order.discount_amount})
+          </div>
+        )}
+      </div>
       <p className="text-white/60 mb-10">
-        Order <span className="font-mono text-[#ff4f00]">{order.order_id}</span> — scan the QR using any UPI app, then upload proof below.
+        Order <span className="font-mono text-brand">{order.order_id}</span> — scan the QR using any UPI app, then upload proof below.
       </p>
 
       <div className="grid lg:grid-cols-2 gap-8">
@@ -96,18 +105,18 @@ export default function Payment() {
           <div>
             <div className="label-eyebrow mb-3">Step 1 — Upload screenshot</div>
             <div {...getRootProps()} data-testid="proof-dropzone"
-              className={`glass-2 rounded-xl p-8 text-center cursor-pointer border border-dashed ${isDragActive ? "border-[#ff4f00] bg-[#ff4f00]/5" : "border-white/15"}`}
+              className={`glass-2 rounded-xl p-8 text-center cursor-pointer border border-dashed ${isDragActive ? "border-brand bg-brand/5" : "border-white/15"}`}
             >
               <input {...getInputProps()} />
               {screenshotUrl ? (
                 <div>
-                  <Check className="w-6 h-6 mx-auto text-[#10B981]" />
-                  <div className="text-sm mt-2">Screenshot uploaded</div>
+                  <img src={resolveMediaUrl(screenshotUrl)} alt="Payment screenshot" className="mx-auto max-h-40 rounded-lg border border-white/10 object-contain" />
+                  <div className="text-sm mt-2 text-[#10B981] flex items-center justify-center gap-1"><Check className="w-4 h-4" /> Screenshot uploaded</div>
                   <div className="text-xs text-white/40 mt-1">Click to replace</div>
                 </div>
               ) : (
                 <div>
-                  <Upload className="w-6 h-6 mx-auto text-[#ff4f00]" />
+                  <Upload className="w-6 h-6 mx-auto text-brand" />
                   <div className="text-sm mt-2">Drop payment screenshot</div>
                 </div>
               )}
@@ -119,7 +128,7 @@ export default function Payment() {
             <input data-testid="utr-input"
               value={utr} onChange={(e) => setUtr(e.target.value)}
               placeholder="e.g. 412345678901"
-              className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-[#ff4f00] font-mono"
+              className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-brand font-mono"
             />
             <div className="text-xs text-white/40 mt-1">Found in your UPI app's transaction details.</div>
           </div>
