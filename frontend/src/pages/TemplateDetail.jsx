@@ -11,6 +11,7 @@ import { ColorSwatchGroup } from "../components/ColorSwatch";
 import { useCart } from "../lib/cart";
 import { toast } from "sonner";
 import TemplateProductCard from "../components/TemplateProductCard";
+import FilterSelect from "../components/templates/FilterSelect";
 
 export default function TemplateDetail() {
   const { slug } = useParams();
@@ -20,6 +21,8 @@ export default function TemplateDetail() {
   const [template, setTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [brands, setBrands] = useState([]);
+  const [models, setModels] = useState([]);
   const [brandId, setBrandId] = useState("");
   const [modelId, setModelId] = useState("");
   const [galleryIdx, setGalleryIdx] = useState(0);
@@ -28,23 +31,45 @@ export default function TemplateDetail() {
 
   useEffect(() => {
     setLoading(true);
+    setBrandId("");
+    setModelId("");
+    setModels([]);
     api
       .get(`/shop/templates/${slug}`)
       .then(async (r) => {
         setTemplate(r.data);
         const brandsRes = await api.get("/brands");
-        const brand = brandsRes.data.find((b) => b.name === r.data.phone_brand) || brandsRes.data[0];
+        const brandList = brandsRes.data || [];
+        setBrands(brandList);
+        const brand = brandList.find((b) => b.name === r.data.phone_brand) || brandList[0];
         if (brand) {
           setBrandId(brand.id);
           const modelsRes = await api.get("/models", { params: { brand_id: brand.id } });
+          const modelList = modelsRes.data || [];
+          setModels(modelList);
           const modelName = r.data.phone_models?.[0];
-          const model = modelsRes.data.find((m) => m.name === modelName) || modelsRes.data[0];
+          const model = modelList.find((m) => m.name === modelName) || modelList[0];
           if (model) setModelId(model.id);
         }
       })
       .catch(() => setError("Template not found"))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  const handleBrandChange = async (nextBrandId) => {
+    setBrandId(nextBrandId);
+    setModelId("");
+    setModels([]);
+    if (!nextBrandId) return;
+    try {
+      const modelsRes = await api.get("/models", { params: { brand_id: nextBrandId } });
+      const modelList = modelsRes.data || [];
+      setModels(modelList);
+      if (modelList[0]) setModelId(modelList[0].id);
+    } catch {
+      setModels([]);
+    }
+  };
 
   const handleAddToCart = async () => {
     if (!template || !brandId || !modelId) return;
@@ -278,6 +303,33 @@ export default function TemplateDetail() {
                 <dd>{template.phone_models?.join(", ") || "All models for brand"}</dd>
               </div>
             </dl>
+          </div>
+
+          <div className="space-y-3" data-testid="device-select">
+            <h3 className="font-medium text-sm">Select your device</h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-white/50 mb-1.5 block">Brand</label>
+                <FilterSelect
+                  value={brandId}
+                  onChange={handleBrandChange}
+                  placeholder="Select brand"
+                  options={brands.map((b) => ({ value: b.id, label: b.name }))}
+                  testId="detail-brand-select"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-white/50 mb-1.5 block">Model</label>
+                <FilterSelect
+                  value={modelId}
+                  onChange={setModelId}
+                  placeholder={brandId ? "Select model" : "Select brand first"}
+                  options={models.map((m) => ({ value: m.id, label: m.name }))}
+                  disabled={!brandId}
+                  testId="detail-model-select"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
