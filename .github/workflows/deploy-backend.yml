@@ -1,0 +1,43 @@
+name: Deploy CaseBox backend (VPS)
+
+# Backend only — frontend stays at https://caseboxstore.com
+# Does not reload nginx or touch other sites on the VPS.
+
+on:
+  push:
+    branches: [main, template-file]
+    paths:
+      - "backend/**"
+      - "scripts/deploy-backend-vps.sh"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy backend over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script_stop: true
+          script: |
+            set -euo pipefail
+            export CASEBOX_REPO_DIR="/var/www/casebox"
+            export CASEBOX_BRANCH="${GITHUB_REF_NAME}"
+            export CASEBOX_PM2_NAME="casebox-api"
+
+            if [ ! -d "$CASEBOX_REPO_DIR/.git" ]; then
+              echo "Missing git repo at $CASEBOX_REPO_DIR"
+              exit 1
+            fi
+
+            cd "$CASEBOX_REPO_DIR"
+            git fetch origin "$CASEBOX_BRANCH"
+            git checkout -B "$CASEBOX_BRANCH" "origin/$CASEBOX_BRANCH"
+            git reset --hard "origin/$CASEBOX_BRANCH"
+            chmod +x scripts/deploy-backend-vps.sh
+            bash scripts/deploy-backend-vps.sh

@@ -70,6 +70,7 @@ const {
   apiRateLimiter,
   uploadRateLimiter,
   orderRateLimiter,
+  verifyPaymentRateLimiter,
   botProtection,
   getClientIp,
   authDelay,
@@ -93,6 +94,20 @@ const {
   normalizeOrderAddress,
   fetchIndiaPostPincode,
 } = require("./lib/indianAddress");
+const {
+  normalizePaymentMethod,
+  toPublicSettings,
+  sanitizeSettingsUpdate,
+  defaultSettings,
+  isRazorpayConfigured,
+  createRazorpayOrderForAppOrder,
+  verifyCheckoutSignature,
+  verifyWebhookSignature,
+  fetchAndConfirmPayment,
+  stripOrderSecrets,
+  getRazorpayKeyId,
+  amountToPaise,
+} = require("./lib/razorpayPayments");
 
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
@@ -757,12 +772,52 @@ app.use(
   })
 );
 app.use(cookieParser());
-app.use(express.json({ limit: "256kb" }));
+app.use(
+  express.json({
+    limit: "256kb",
+    verify: (req, _res, buf) => {
+      // Preserve raw body for Razorpay webhook HMAC verification
+      if (req.originalUrl && req.originalUrl.includes("/webhooks/razorpay")) {
+        req.rawBody = buf;
+      }
+    },
+  })
+);
 app.use("/api/uploads", express.static(UPLOAD_DIR, {
   dotfiles: "deny",
   index: false,
 }));
 app.use("/api", apiRateLimiter);
+
+async function getMainSettings() {
+  let s = await db.collection("settings").findOne({ id: "main" });
+  if (!s) {
+    s = defaultSettings();
+    await db.collection("settings").insertOne(s);
+  }
+  return s;
+}
+
+async function assertOrderAccess(req, order) {
+  if (!order) return { status: 404, detail: "Order not found" };
+  if (order.user_id && order.user_id !== req.user.id && req.user.role !== "admin") {
+    return { status: 403, detail: "Not authorized for this order" };
+  }
+  return null;
+}
+
+function logPaymentVerifyFailure(orderId, reason, extra = {}) {
+  console.warn(
+    JSON.stringify({
+      type: "payment_verify_failed",
+      order_id: orderId,
+      reason,
+      timestamp: nowIso(),
+      ...extra,
+    })
+  );
+}
+
 
 const cookieOpts = {
   httpOnly: true,
@@ -1283,7 +1338,15 @@ api.post("/upload/design", uploadRateLimiter, handleUpload("designs"), (req, res
   res.json({ url: publicUrl(`uploads/designs/${req.file.filename}`) });
 });
 
-api.post("/upload/payment", uploadRateLimiter, getCurrentUser, handleUpload("payments"), (req, res) => {
+api.post("/upload/payment", uploadRateLimiter, getCurrentUser, async (req, res, next) => {
+  const settings = await getMainSettings();
+  if (normalizePaymentMethod(settings.payment_method) !== "manual_upi") {
+    return res.status(400).json({
+      detail: "Manual UPI uploads are disabled. Please complete payment via Razorpay.",
+    });
+  }
+  return handleUpload("payments")(req, res, next);
+}, (req, res) => {
   if (!req.file) return res.status(400).json({ detail: "No file uploaded" });
   res.json({ url: publicUrl(`uploads/payments/${req.file.filename}`) });
 });
@@ -2307,11 +2370,26 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
       design_transform: line.design_transform || null,
       case_color: line.case_color || null,
     }));
+    // Always persist selected device on the order root from the priced line
+    // (client-selected Brand/Model from Buy Now / cart — never template defaults alone)
+    const first = pricedOrder.lines[0];
+    body.brand_id = first.brand.id;
+    body.brand_name = first.brand.name;
+    body.model_id = first.model.id;
+    body.model_name = first.model.name;
+    body.product_id = first.product.id;
+    body.product_name = first.product.name;
+    if (first.template_product_id) body.template_product_id = first.template_product_id;
+    if (first.design_url) body.design_url = first.design_url;
+    if (first.preview_url) body.preview_url = first.preview_url;
   } else {
     const line = pricedOrder.lines[0];
     templateProduct = line.templateProduct;
+    body.brand_id = line.brand.id;
     body.brand_name = line.brand.name;
+    body.model_id = line.model.id;
     body.model_name = line.model.name;
+    body.product_id = line.product.id;
     body.product_name = line.product.name;
     body.price = line.price;
     if (body.case_color == null && line.case_color != null) {
@@ -2362,6 +2440,9 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
   Object.assign(body, normalizedAddress.address);
   body.phone = phone;
 
+  const settings = await getMainSettings();
+  const paymentMethod = normalizePaymentMethod(settings.payment_method);
+
   const order = {
     id: crypto.randomUUID(),
     order_id: genOrderId(),
@@ -2372,10 +2453,18 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     shipping_fee: SHIPPING_FEE,
     ...promoFields,
     amount,
+    currency: settings.currency || "INR",
+    payment_method: paymentMethod,
     payment_status: "pending",
     delivery_status: "pending_payment_verification",
     utr: null,
     payment_screenshot_url: null,
+    razorpay_order_id: null,
+    razorpay_payment_id: null,
+    razorpay_signature: null,
+    razorpay_method: null,
+    razorpay_amount_paise: null,
+    payment_verified_at: null,
     print_url: null,
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -2493,13 +2582,22 @@ api.get("/orders/:order_id", async (req, res) => {
   }
   const o = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
   if (!o) return res.status(404).json({ detail: "Order not found" });
-  res.json(o);
+  // Never expose HMAC signature to clients
+  res.json(stripOrderSecrets(o));
 });
 
 api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => {
   if (!isValidOrderId(req.params.order_id)) {
     return res.status(400).json({ detail: "Invalid order ID" });
   }
+
+  const settings = await getMainSettings();
+  if (normalizePaymentMethod(settings.payment_method) !== "manual_upi") {
+    return res.status(400).json({
+      detail: "Manual UPI payment is disabled. Please complete payment via Razorpay.",
+    });
+  }
+
   const utr = clampString(req.body?.utr, 50);
   const screenshot_url = req.body?.screenshot_url;
   if (!utr || !screenshot_url) {
@@ -2509,16 +2607,16 @@ api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => 
     return res.status(400).json({ detail: "Invalid screenshot URL" });
   }
   const o = await db.collection("orders").findOne({ order_id: req.params.order_id });
-  if (!o) return res.status(404).json({ detail: "Order not found" });
-  if (o.user_id && o.user_id !== req.user.id && req.user.role !== "admin") {
-    return res.status(403).json({ detail: "Not authorized for this order" });
-  }
+  const accessErr = await assertOrderAccess(req, o);
+  if (accessErr) return res.status(accessErr.status).json({ detail: accessErr.detail });
+
   await db.collection("orders").updateOne(
     { order_id: req.params.order_id },
     {
       $set: {
         utr,
         payment_screenshot_url: screenshot_url,
+        payment_method: "manual_upi",
         payment_status: "submitted",
         delivery_status: "pending_payment_verification",
         updated_at: nowIso(),
@@ -2527,6 +2625,265 @@ api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => 
   );
   const o2 = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
   res.json(o2);
+});
+
+api.post("/orders/:order_id/razorpay-order", getCurrentUser, async (req, res) => {
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
+  }
+
+  const settings = await getMainSettings();
+  if (normalizePaymentMethod(settings.payment_method) !== "razorpay") {
+    return res.status(400).json({ detail: "Razorpay is not the active payment method" });
+  }
+  if (!isRazorpayConfigured()) {
+    return res.status(503).json({ detail: "Razorpay is not configured on the server" });
+  }
+
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  const accessErr = await assertOrderAccess(req, order);
+  if (accessErr) return res.status(accessErr.status).json({ detail: accessErr.detail });
+
+  if (order.payment_status === "approved") {
+    return res.status(400).json({ detail: "Order is already paid" });
+  }
+
+  try {
+    const rz = await createRazorpayOrderForAppOrder(order);
+    await db.collection("orders").updateOne(
+      { order_id: order.order_id },
+      {
+        $set: {
+          payment_method: "razorpay",
+          razorpay_order_id: rz.razorpay_order_id,
+          currency: rz.currency || order.currency || "INR",
+          updated_at: nowIso(),
+        },
+      }
+    );
+    res.json({
+      razorpay_order_id: rz.razorpay_order_id,
+      amount: rz.amount,
+      currency: rz.currency,
+      key_id: rz.key_id || getRazorpayKeyId(),
+      order_id: order.order_id,
+    });
+  } catch (err) {
+    console.error("Razorpay order create failed:", err.message);
+    return res.status(err.status || 500).json({ detail: err.message || "Could not create Razorpay order" });
+  }
+});
+
+api.post("/orders/:order_id/verify-payment", verifyPaymentRateLimiter, getCurrentUser, async (req, res) => {
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
+  }
+
+  const razorpay_order_id = clampString(req.body?.razorpay_order_id, 64);
+  const razorpay_payment_id = clampString(req.body?.razorpay_payment_id, 64);
+  const razorpay_signature = clampString(req.body?.razorpay_signature, 128);
+
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    logPaymentVerifyFailure(req.params.order_id, "missing_fields");
+    return res.status(400).json({ detail: "razorpay_order_id, razorpay_payment_id, and razorpay_signature are required" });
+  }
+
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  const accessErr = await assertOrderAccess(req, order);
+  if (accessErr) return res.status(accessErr.status).json({ detail: accessErr.detail });
+
+  if (order.payment_status === "approved") {
+    return res.json({
+      success: true,
+      already_approved: true,
+      order_id: order.order_id,
+      payment_status: "approved",
+      razorpay_payment_id: order.razorpay_payment_id || razorpay_payment_id,
+    });
+  }
+
+  if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
+    logPaymentVerifyFailure(order.order_id, "order_id_mismatch", {
+      expected: order.razorpay_order_id,
+      received: razorpay_order_id,
+    });
+    return res.status(400).json({ detail: "Payment does not match this order" });
+  }
+
+  const valid = verifyCheckoutSignature({
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+  });
+
+  if (!valid) {
+    logPaymentVerifyFailure(order.order_id, "signature_mismatch", {
+      razorpay_order_id,
+      razorpay_payment_id,
+    });
+    return res.status(400).json({ detail: "Invalid payment signature" });
+  }
+
+  let paymentDetails;
+  try {
+    paymentDetails = await fetchAndConfirmPayment(razorpay_payment_id, {
+      ...order,
+      razorpay_order_id: order.razorpay_order_id || razorpay_order_id,
+    });
+  } catch (err) {
+    logPaymentVerifyFailure(order.order_id, err.code || "payment_confirm_failed", {
+      razorpay_order_id,
+      razorpay_payment_id,
+      detail: err.message,
+    });
+    return res.status(err.status || 400).json({ detail: err.message || "Payment confirmation failed" });
+  }
+
+  const verifiedAt = nowIso();
+  await db.collection("orders").updateOne(
+    { order_id: order.order_id, payment_status: { $ne: "approved" } },
+    {
+      $set: {
+        payment_method: "razorpay",
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        razorpay_method: paymentDetails.method,
+        razorpay_amount_paise: paymentDetails.amount,
+        razorpay_currency: paymentDetails.currency,
+        payment_status: "approved",
+        delivery_status: "payment_approved",
+        payment_verified_at: verifiedAt,
+        payment_verified_via: "checkout_callback",
+        updated_at: verifiedAt,
+      },
+    }
+  );
+
+  // Never return razorpay_signature (or any secret) to the client
+  res.json({
+    success: true,
+    order_id: order.order_id,
+    payment_status: "approved",
+    razorpay_payment_id,
+  });
+});
+
+api.post("/webhooks/razorpay", async (req, res) => {
+  const signature = req.headers["x-razorpay-signature"];
+  if (!signature) {
+    return res.status(400).json({ detail: "Missing X-Razorpay-Signature" });
+  }
+
+  let valid;
+  try {
+    valid = verifyWebhookSignature(req.rawBody || Buffer.from(JSON.stringify(req.body || {})), signature);
+  } catch (err) {
+    console.error("Razorpay webhook config error:", err.message);
+    return res.status(err.status || 500).json({ detail: err.message });
+  }
+
+  if (!valid) {
+    console.warn(
+      JSON.stringify({
+        type: "razorpay_webhook_invalid_signature",
+        timestamp: nowIso(),
+      })
+    );
+    return res.status(400).json({ detail: "Invalid webhook signature" });
+  }
+
+  const event = req.body || {};
+  const eventId = event.id || event.event_id;
+  if (!eventId) {
+    return res.status(400).json({ detail: "Missing event id" });
+  }
+
+  const events = db.collection("razorpay_webhook_events");
+  const already = await events.findOne({ id: eventId });
+  if (already) {
+    return res.json({ ok: true, duplicate: true });
+  }
+
+  const eventName = event.event;
+  const paymentEntity = event.payload?.payment?.entity;
+  const razorpayOrderId = paymentEntity?.order_id;
+  const razorpayPaymentId = paymentEntity?.id;
+  const notesOrderId = paymentEntity?.notes?.order_id;
+
+  let order = null;
+  if (razorpayOrderId) {
+    order = await db.collection("orders").findOne({ razorpay_order_id: razorpayOrderId });
+  }
+  if (!order && notesOrderId && isValidOrderId(notesOrderId)) {
+    order = await db.collection("orders").findOne({ order_id: notesOrderId });
+  }
+
+  if (eventName === "payment.captured" && order && order.payment_status !== "approved") {
+    const expectedPaise = amountToPaise(order.amount);
+    const paidAmount = Number(paymentEntity?.amount);
+    const paidCurrency = String(paymentEntity?.currency || "").toUpperCase();
+    const amountOk = !Number.isFinite(paidAmount) || paidAmount === expectedPaise;
+    const currencyOk = !paidCurrency || paidCurrency === String(order.currency || "INR").toUpperCase();
+
+    if (!amountOk || !currencyOk) {
+      console.warn(
+        JSON.stringify({
+          type: "razorpay_webhook_amount_mismatch",
+          order_id: order.order_id,
+          expected_paise: expectedPaise,
+          received_paise: paidAmount,
+          currency: paidCurrency,
+          timestamp: nowIso(),
+        })
+      );
+    } else {
+      const verifiedAt = nowIso();
+      await db.collection("orders").updateOne(
+        { order_id: order.order_id, payment_status: { $ne: "approved" } },
+        {
+          $set: {
+            payment_method: "razorpay",
+            razorpay_order_id: razorpayOrderId || order.razorpay_order_id,
+            razorpay_payment_id: razorpayPaymentId || order.razorpay_payment_id,
+            razorpay_method: paymentEntity?.method || order.razorpay_method || null,
+            razorpay_amount_paise: Number.isFinite(paidAmount) ? paidAmount : amountToPaise(order.amount),
+            razorpay_currency: paidCurrency || order.currency || "INR",
+            payment_status: "approved",
+            delivery_status: "payment_approved",
+            payment_verified_at: verifiedAt,
+            payment_verified_via: "webhook",
+            updated_at: verifiedAt,
+          },
+        }
+      );
+    }
+  } else if (eventName === "payment.failed" && order && order.payment_status !== "approved") {
+    await db.collection("orders").updateOne(
+      { order_id: order.order_id, payment_status: { $ne: "approved" } },
+      {
+        $set: {
+          payment_method: "razorpay",
+          razorpay_order_id: razorpayOrderId || order.razorpay_order_id,
+          razorpay_payment_id: razorpayPaymentId || order.razorpay_payment_id,
+          payment_status: "failed",
+          payment_failure_reason: paymentEntity?.error_description || paymentEntity?.error_code || "payment_failed",
+          updated_at: nowIso(),
+        },
+      }
+    );
+  }
+
+  await events.insertOne({
+    id: eventId,
+    event: eventName,
+    order_id: order?.order_id || null,
+    razorpay_order_id: razorpayOrderId || null,
+    razorpay_payment_id: razorpayPaymentId || null,
+    processed_at: nowIso(),
+  });
+
+  res.json({ ok: true });
 });
 
 api.get("/admin/orders", getCurrentAdmin, async (req, res) => {
@@ -2856,19 +3213,24 @@ api.delete("/admin/gallery/:id", getCurrentAdmin, async (req, res) => {
 
 // --- Settings ---
 api.get("/settings", async (req, res) => {
-  let s = await db.collection("settings").findOne({ id: "main" }, { projection: { _id: 0 } });
-  if (!s) {
-    s = { id: "main", upi_id: "merchant@upi", merchant_name: "CASEBOX", whatsapp_number: "+919999999999", currency: "INR" };
-    await db.collection("settings").insertOne(s);
-  }
-  res.json(s);
+  const s = await getMainSettings();
+  const { _id, ...rest } = s;
+  res.json(toPublicSettings(rest));
 });
 
 api.put("/settings", getCurrentAdmin, async (req, res) => {
-  const update = req.body;
+  const update = sanitizeSettingsUpdate(req.body || {});
+  if (Object.keys(update).length === 0) {
+    return res.status(400).json({ detail: "No fields to update" });
+  }
+  if (update.payment_method === "razorpay" && !isRazorpayConfigured()) {
+    return res.status(400).json({
+      detail: "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server env before enabling Razorpay",
+    });
+  }
   await db.collection("settings").updateOne({ id: "main" }, { $set: update }, { upsert: true });
   const s = await db.collection("settings").findOne({ id: "main" }, { projection: { _id: 0 } });
-  res.json(s);
+  res.json(toPublicSettings(s));
 });
 
 // --- Health ---
@@ -2891,6 +3253,9 @@ async function seed() {
   );
   await db.collection("orders").createIndex("order_id", { unique: true });
   await db.collection("orders").createIndex("user_id");
+  await db.collection("orders").createIndex("razorpay_order_id");
+  await db.collection("orders").createIndex("razorpay_payment_id");
+  await db.collection("razorpay_webhook_events").createIndex("id", { unique: true });
   await db.collection("templates").createIndex("id", { unique: true });
   await db.collection("templates").createIndex({ model_id: 1, case_type_slug: 1 });
   await db.collection("promo_codes").createIndex("id", { unique: true });
@@ -3001,13 +3366,26 @@ async function seed() {
   }
 
   if (!(await db.collection("settings").findOne({ id: "main" }))) {
-    await db.collection("settings").insertOne({
-      id: "main",
-      upi_id: "merchant@upi",
-      merchant_name: "CASEBOX",
-      whatsapp_number: "+919999999999",
-      currency: "INR",
-    });
+    await db.collection("settings").insertOne(defaultSettings());
+  } else {
+    // Backfill payment_method without overwriting existing admin choices
+    await db.collection("settings").updateOne(
+      { id: "main", payment_method: { $exists: false } },
+      { $set: { payment_method: "manual_upi" } }
+    );
+    // Never leave secrets that may have been stored by mistake
+    await db.collection("settings").updateOne(
+      { id: "main" },
+      {
+        $unset: {
+          razorpay_key_secret: "",
+          razorpay_webhook_secret: "",
+          razorpay_secret: "",
+          key_secret: "",
+          webhook_secret: "",
+        },
+      }
+    );
   }
 }
 
