@@ -3,24 +3,62 @@ import { api } from "./api";
 
 const AuthCtx = createContext(null);
 
+function isValidSessionUser(data) {
+  return (
+    data &&
+    typeof data === "object" &&
+    typeof data.id === "string" &&
+    typeof data.email === "string" &&
+    (data.role === "customer" || data.role === "admin")
+  );
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refreshUser = () =>
     api
       .get("/auth/me")
-      .then((r) => setUser(r.data))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (isValidSessionUser(r.data)) {
+          setUser(r.data);
+          return r.data;
+        }
+        localStorage.removeItem("form_token");
+        setUser(null);
+        return null;
+      })
+      .catch(() => {
+        localStorage.removeItem("form_token");
+        setUser(null);
+        return null;
+      });
+
+  useEffect(() => {
+    refreshUser().finally(() => setLoading(false));
   }, []);
 
-  const login = async (email, password) => {
-    const { data } = await api.post("/auth/login", { email, password });
+  const login = async (email, password, security = {}) => {
+    const { data } = await api.post("/auth/login", { email, password, ...security });
     if (data.access_token) localStorage.setItem("form_token", data.access_token);
     setUser(data.user);
     return data.user;
   };
+
+  const register = async (name, email, password, phone, security = {}) => {
+    const { data } = await api.post("/auth/register", { name, email, password, phone, ...security });
+    if (data.access_token) localStorage.setItem("form_token", data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  const updateProfile = async (profile) => {
+    const { data } = await api.patch("/profile", profile);
+    setUser(data);
+    return data;
+  };
+
   const logout = async () => {
     await api.post("/auth/logout").catch(() => {});
     localStorage.removeItem("form_token");
@@ -28,7 +66,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthCtx.Provider value={{ user, loading, login, logout }}>
+    <AuthCtx.Provider value={{ user, loading, login, register, updateProfile, logout, refreshUser }}>
       {children}
     </AuthCtx.Provider>
   );

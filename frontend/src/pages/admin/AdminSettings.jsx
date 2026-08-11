@@ -34,7 +34,7 @@ export default function AdminSettings() {
             <div className="label-eyebrow mb-2">{f.l}</div>
             <input data-testid={`settings-${f.k}`}
               value={form[f.k]} onChange={(e) => setForm({ ...form, [f.k]: e.target.value })}
-              className={`w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:ring-1 focus:ring-[#ff4f00] focus:outline-none ${f.mono ? "font-mono" : ""}`}
+              className={`w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:ring-1 focus:ring-brand focus:outline-none ${f.mono ? "font-mono" : ""}`}
             />
           </div>
         ))}

@@ -31,7 +31,10 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+.env
+.env.*
+!.env.example
+*.env
 *token.json*
 *credentials.json*
 
@@ -46,23 +49,12 @@ dump.rdb
 .DS_Store
 *.pem
 
-# Python
-__pycache__/
-*pyc*
-venv/
-.venv/
-
-# Development tools
-chainlit.md
-.chainlit
-.ipynb_checkpoints/
-.ac
-
 # Deployment
 .vercel
 
 # Data and databases
-agenthub/agents/youtube/db
+tools/mongodb-database-tools/
+backups/
 
 # Archive files and large assets
 **/*.zip
@@ -76,14 +68,19 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
-memory/test_credentials.md
+# Archives at repo root
+backend.zip
+mongodb-backup.zip
 
 # Mobile development
 android-sdk/frontend/node_modules/.cache/default-development/4.pack
 .env
 .env.*
 *.env
+!.env.example
 credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/0.pack
+backend/uploads/**/*
+!backend/uploads/**/.gitkeep

@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CASEBOX — Complete Site & Image Upload Guide</title>
+  <style>
+    @page { margin: 18mm 16mm; size: A4; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      color: #1a1a1a;
+      line-height: 1.55;
+      font-size: 11pt;
+      margin: 0;
+      background: #fff;
+    }
+    .cover {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      background: linear-gradient(160deg, #09090b 0%, #1a1a1f 60%, #2a1810 100%);
+      color: #fff;
+      padding: 48px 32px;
+      page-break-after: always;
+    }
+    .cover img.logo { width: 120px; height: auto; margin-bottom: 24px; }
+    .cover h1 { font-size: 2.4rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .cover .accent { color: #ff4f00; }
+    .cover p { color: rgba(255,255,255,0.65); max-width: 480px; margin: 12px auto 0; }
+    .cover .meta { margin-top: 48px; font-size: 0.85rem; color: rgba(255,255,255,0.4); }
+    h1.page-title { font-size: 1.6rem; color: #09090b; border-bottom: 3px solid #ff4f00; padding-bottom: 8px; margin-top: 0; }
+    h2 { font-size: 1.15rem; color: #ff4f00; margin-top: 28px; page-break-after: avoid; }
+    h3 { font-size: 0.95rem; margin-top: 18px; page-break-after: avoid; }
+    section { padding: 32px 40px; max-width: 900px; margin: 0 auto; }
+    section.page-break { page-break-before: always; }
+    p, li { color: #333; }
+    ul { padding-left: 1.25rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      font-size: 10pt;
+      page-break-inside: avoid;
+    }
+    th {
+      background: #09090b;
+      color: #fff;
+      text-align: left;
+      padding: 10px 12px;
+      font-weight: 600;
+    }
+    td {
+      border: 1px solid #e5e5e5;
+      padding: 9px 12px;
+      vertical-align: top;
+    }
+    tr:nth-child(even) td { background: #fafafa; }
+    .badge {
+      display: inline-block;
+      background: #ff4f00;
+      color: #fff;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge.admin { background: #1a1a1f; }
+    .badge.customer { background: #10b981; }
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin: 16px 0 24px;
+    }
+    .preview-card {
+      border: 1px solid #e5e5e5;
+      border-radius: 10px;
+      overflow: hidden;
+      page-break-inside: avoid;
+    }
+    .preview-card img {
+      width: 100%;
+      height: 140px;
+      object-fit: contain;
+      background: #111;
+      display: block;
+    }
+    .preview-card .cap {
+      padding: 8px 10px;
+      font-size: 0.75rem;
+      background: #f5f5f5;
+      color: #555;
+    }
+    .preview-card .cap strong { color: #111; display: block; margin-bottom: 2px; }
+    .flow {
+      background: #f8f8f8;
+      border-left: 4px solid #ff4f00;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-family: Consolas, monospace;
+      font-size: 0.85rem;
+      page-break-inside: avoid;
+    }
+    .tip {
+      background: #fff8f4;
+      border: 1px solid #ffd4b8;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      font-size: 0.9rem;
+    }
+    .tip strong { color: #cc3f00; }
+    .toc a { color: #ff4f00; text-decoration: none; }
+    .toc li { margin: 6px 0; }
+    .spec-highlight {
+      display: inline-block;
+      background: #09090b;
+      color: #ff4f00;
+      font-family: Consolas, monospace;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media print {
+      section { padding: 0; max-width: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <img class="logo" src="../frontend/public/images/case_box.png" alt="CASEBOX logo" />
+  <h1><span class="accent">CASEBOX</span></h1>
+  <p>Complete site documentation &amp; image upload size recommendation guide</p>
+  <p class="meta">Generated July 3, 2026 · CASEBOX · Private documentation</p>
+</div>
+
+<!-- TOC -->
+<section>
+  <h1 class="page-title">Table of Contents</h1>
+  <ol class="toc">
+    <li><a href="#overview">1. Platform Overview</a></li>
+    <li><a href="#upload-guide">2. Image Upload Size Guide (All Types)</a></li>
+    <li><a href="#demo-seeding">2b. Demo Catalog Seeding</a></li>
+    <li><a href="#upload-previews">3. Image Preview Examples</a></li>
+    <li><a href="#storefront">4. Storefront Pages &amp; Routes</a></li>
+    <li><a href="#admin">5. Admin Dashboard</a></li>
+    <li><a href="#order-flow">6. Order &amp; Payment Flow</a></li>
+    <li><a href="#api">7. API &amp; Technical Reference</a></li>
+    <li><a href="#design">8. Design System</a></li>
+  </ol>
+</section>
+
+<!-- OVERVIEW -->
+<section id="overview" class="page-break">
+  <h1 class="page-title">1. Platform Overview</h1>
+  <p><strong>CASEBOX</strong> is a full-stack custom phone case e-commerce platform. Customers can design their own cases or buy pre-made templates from the Shop. Orders are paid via UPI with manual screenshot verification.</p>
+
+  <h2>Core Capabilities</h2>
+  <table>
+    <tr><th>Area</th><th>Features</th></tr>
+    <tr>
+      <td><span class="badge customer">Customer</span></td>
+      <td>Custom designer (Fabric.js), template shop, user accounts, checkout, UPI payment, order tracking, wishlist</td>
+    </tr>
+    <tr>
+      <td><span class="badge admin">Admin</span></td>
+      <td>Orders, catalog (brands/models/case types), case overlay templates, shop template products, promo codes, popup offers, settings</td>
+    </tr>
+    <tr>
+      <td>Backend</td>
+      <td>Node.js + Express + MongoDB, JWT auth, Multer file uploads (max 12 MB general), static serving at <code>/api/uploads/</code></td>
+    </tr>
+  </table>
+
+  <h2>Tech Stack</h2>
+  <ul>
+    <li><strong>Frontend:</strong> React 19, React Router 7, Tailwind CSS, Shadcn UI, Fabric.js, Framer Motion</li>
+    <li><strong>Backend:</strong> Node.js, Express, MongoDB, Multer, JWT, bcryptjs</li>
+    <li><strong>Payments:</strong> Manual UPI (QR code + screenshot + UTR verification)</li>
+  </ul>
+</section>
+
+<!-- UPLOAD GUIDE -->
+<section id="upload-guide" class="page-break">
+  <h1 class="page-title">2. Image Upload Size Guide</h1>
+  <p>All uploads accept common web image formats unless noted. Server enforces hard file-size limits — stay under the recommended sizes for faster uploads and better performance.</p>
+
+  <div class="tip"><strong>Global allowed formats (most uploads):</strong> JPG, JPEG, PNG, WEBP, GIF</div>
+
+  <h2>Complete Upload Specifications</h2>
+  <table>
+    <tr>
+      <th>Upload Type</th>
+      <th>Who Uses It</th>
+      <th>Recommended Dimensions</th>
+      <th>Aspect Ratio</th>
+      <th>Formats</th>
+      <th>Max File Size</th>
+      <th>Notes</th>
+    </tr>
+    <tr>
+      <td><strong>Customer design artwork</strong><br><code>/upload/design</code></td>
+      <td>Customer (Customizer)</td>
+      <td>2000 × 4000 px or higher<br><em>(portrait, high-res)</em></td>
+      <td>~9:16 phone portrait</td>
+      <td>JPG, PNG, WEBP</td>
+      <td><span class="spec-highlight">12 MB</span></td>
+      <td>Drag, zoom, rotate on Fabric.js canvas. Clipped to camera mask zones. Use high-res source for sharp prints.</td>
+    </tr>
+    <tr>
+      <td><strong>Canvas preview PNG</strong><br><code>/upload/preview</code></td>
+      <td>System (auto on checkout)</td>
+      <td>Matches template canvas<br><em>(e.g. 360×720 – 1080×2160)</em></td>
+      <td>Phone case frame</td>
+      <td>PNG</td>
+      <td><span class="spec-highlight">12 MB</span></td>
+      <td>Generated automatically when customer continues to checkout. Stored with order.</td>
+    </tr>
+    <tr>
+      <td><strong>Payment screenshot</strong><br><code>/upload/payment</code></td>
+      <td>Customer (Payment page)</td>
+      <td>Any readable screenshot<br><em>(phone screen capture)</em></td>
+      <td>Any</td>
+      <td>JPG, PNG, WEBP, GIF</td>
+      <td><span class="spec-highlight">12 MB</span></td>
+      <td>UPI payment proof. Must show amount and transaction reference clearly.</td>
+    </tr>
+    <tr>
+      <td><strong>Case overlay template</strong><br><code>/admin/templates</code></td>
+      <td>Admin (Case Overlays)</td>
+      <td>Native PNG dimensions<br><em>(typically 800–1200 px tall)</em></td>
+      <td>Phone outline</td>
+      <td><strong>PNG only</strong></td>
+      <td><span class="spec-highlight">12 MB</span></td>
+      <td>Plain phone frame PNG. Canvas size read from image. Draw camera/flash mask zones in Zone Editor.</td>
+    </tr>
+    <tr>
+      <td><strong>Shop template thumbnail</strong><br><code>/admin/template-products</code></td>
+      <td>Admin (Templates shop)</td>
+      <td><span class="spec-highlight">800 × 640 px</span></td>
+      <td>5:4</td>
+      <td>JPG, PNG, WEBP</td>
+      <td><span class="spec-highlight">12 MB</span><br><em>rec. 2 MB</em></td>
+      <td>Center the phone case. Dark (#111) or transparent background. Matches shop card frame.</td>
+    </tr>
+    <tr>
+      <td><strong>Shop template gallery</strong><br><code>/admin/template-products</code></td>
+      <td>Admin (Templates shop)</td>
+      <td><span class="spec-highlight">800 × 640 px</span> each</td>
+      <td>5:4</td>
+      <td>JPG, PNG, WEBP</td>
+      <td><span class="spec-highlight">12 MB</span> each<br><em>rec. 2 MB</em></td>
+      <td>Up to 10 gallery images per product. Same spec as thumbnail.</td>
+    </tr>
+    <tr>
+      <td><strong>Brand logo</strong><br><code>/admin/catalog</code></td>
+      <td>Admin (Catalog)</td>
+      <td><span class="spec-highlight">128 × 128 px</span></td>
+      <td>1:1 square</td>
+      <td>JPG, PNG, WEBP, GIF</td>
+      <td><span class="spec-highlight">2 MB</span></td>
+      <td>Shown in brand picker during customization.</td>
+    </tr>
+    <tr>
+      <td><strong>Phone model image</strong><br><code>/admin/catalog</code></td>
+      <td>Admin (Catalog)</td>
+      <td><span class="spec-highlight">400 × 400 px</span></td>
+      <td>1:1 square</td>
+      <td>JPG, PNG, WEBP, GIF</td>
+      <td><span class="spec-highlight">4 MB</span></td>
+      <td>Model selection cards in customizer.</td>
+    </tr>
+    <tr>
+      <td><strong>Case type image</strong><br><code>/admin/catalog</code></td>
+      <td>Admin (Catalog)</td>
+      <td><span class="spec-highlight">400 × 400 px</span></td>
+      <td>1:1 square</td>
+      <td>JPG, PNG, WEBP, GIF</td>
+      <td><span class="spec-highlight">4 MB</span></td>
+      <td>Silicone, matte, transparent, glass case type cards.</td>
+    </tr>
+    <tr>
+      <td><strong>Homepage popup offer</strong><br><code>/admin/popup-offers</code></td>
+      <td>Admin (Marketing)</td>
+      <td><span class="spec-highlight">800 × 1000 px</span></td>
+      <td>4:5 portrait</td>
+      <td>JPG, PNG, WEBP, GIF</td>
+      <td><span class="spec-highlight">12 MB</span></td>
+      <td>Promotional modal on homepage. Schedule with start/end dates.</td>
+    </tr>
+  </table>
+
+  <h2>Quick Reference — Recommended Sizes</h2>
+  <table>
+    <tr><th>Purpose</th><th>Size</th><th>Ratio</th></tr>
+    <tr><td>Shop / template product cards</td><td>800 × 640 px</td><td>5:4</td></tr>
+    <tr><td>Popup promotional banner</td><td>800 × 1000 px</td><td>4:5</td></tr>
+    <tr><td>Brand logo</td><td>128 × 128 px</td><td>1:1</td></tr>
+    <tr><td>Model &amp; case type images</td><td>400 × 400 px</td><td>1:1</td></tr>
+    <tr><td>Customer print artwork</td><td>2000+ px tall (portrait)</td><td>~9:16</td></tr>
+    <tr><td>Case overlay frame PNG</td><td>Native phone outline PNG</td><td>Varies by model</td></tr>
+  </table>
+
+  <h2>Best Practices</h2>
+  <ul>
+    <li><strong>Shop thumbnails:</strong> Center the phone case on a dark (#111111) or transparent background. Avoid busy backgrounds — cards crop to 5:4.</li>
+    <li><strong>Customer artwork:</strong> Upload the highest quality source you have. The canvas scales down for preview but the original is used for printing.</li>
+    <li><strong>Case overlay PNGs:</strong> Use a clean phone outline with transparent areas for camera cutouts. PNG only — no JPEG.</li>
+    <li><strong>Compress before upload:</strong> Use TinyPNG, Squoosh, or export at 80–90% JPEG quality to stay under recommended sizes without visible quality loss.</li>
+    <li><strong>Payment screenshots:</strong> Ensure UTR/reference number and amount are legible. Full-screen UPI success screen works best.</li>
+  </ul>
+</section>
+
+<!-- DEMO SEEDING -->
+<section id="demo-seeding" class="page-break">
+  <h1 class="page-title">2b. Demo Catalog Seeding</h1>
+  <p>Use the backend seed scripts to populate the Shop with demo phone cases and expand Customize frame overlays for priority phone models. Safe to re-run — existing <code>demo-*</code> products are skipped.</p>
+
+  <h2>Commands</h2>
+  <div class="flow">
+cd backend<br>
+npm run generate:demo-images   # creates 800×640 thumbnails in scripts/demo-images/<br>
+npm run seed:demo              # inserts products + clones missing templates
+  </div>
+
+  <h2>What Gets Created</h2>
+  <table>
+    <tr><th>Type</th><th>Admin Page</th><th>Count</th><th>Image Spec</th></tr>
+    <tr>
+      <td><strong>Phone Cases</strong> (Shop)</td>
+      <td>Admin → Phone Cases</td>
+      <td>21 published demo products</td>
+      <td>800 × 640 px JPG · dark #111 background · slug prefix <code>demo-</code></td>
+    </tr>
+    <tr>
+      <td><strong>Phone Case Templates</strong> (Customize)</td>
+      <td>Admin → Phone Case Templates</td>
+      <td>Cloned for 8 priority models × 4 case types</td>
+      <td>Transparent PNG frame · mask zones copied from source</td>
+    </tr>
+  </table>
+
+  <h2>Shop vs Template Images</h2>
+  <ul>
+    <li><strong>Shop Phone Cases</strong> — product photos or styled thumbnails (JPG/PNG/WEBP). AI-generated or designed images work well. Replace anytime via Admin → edit product → upload new thumbnail.</li>
+    <li><strong>Customize Templates</strong> — transparent PNG frame overlays only. AI mockup photos are rejected. Clone existing frames or export hollow phone outlines from a design tool.</li>
+  </ul>
+
+  <div class="tip"><strong>After seeding:</strong> 6 demo products are marked <em>Featured</em> for the homepage slider. Spot-check cloned template mask zones in Admin → Zone Editor if camera cutouts look misaligned on a new phone model.</div>
+
+  <h2>Configuration Files</h2>
+  <ul>
+    <li><code>backend/scripts/demo-catalog.json</code> — product titles, categories, prices, featured flags, priority models</li>
+    <li><code>backend/scripts/demo-images/</code> — generated thumbnails (one per <code>demo-*</code> slug)</li>
+    <li><code>backend/scripts/seed-demo-catalog.js</code> — idempotent MongoDB seeder</li>
+  </ul>
+</section>
+
+<!-- IMAGE PREVIEWS -->
+<section id="upload-previews" class="page-break">
+  <h1 class="page-title">3. Image Preview Examples</h1>
+  <p>Sample images from the project showing how each upload type appears in the system.</p>
+
+  <h2>Static Site Assets (Public)</h2>
+  <div class="preview-grid">
+    <div class="preview-card">
+      <img src="../frontend/public/images/case_box.png" alt="Site logo" />
+      <div class="cap"><strong>Site Logo</strong>case_box.png — Header &amp; favicon</div>
+    </div>
+    <div class="preview-card">
+      <img src="../frontend/public/images/frame-tum.jpg" alt="Frame thumbnail" />
+      <div class="cap"><strong>Frame Thumbnail</strong>frame-tum.jpg — Showcase frame</div>
+    </div>
+    <div class="preview-card">
+      <img src="../frontend/public/images/404-hero.png" alt="404 page" />
+      <div class="cap"><strong>404 Hero</strong>404-hero.png — Not found page</div>
+    </div>
+  </div>
+
+  <h2>Catalog Images (Admin Uploads)</h2>
+  <div class="preview-grid">
+    <div class="preview-card">
+      <img src="../backend/uploads/brands/116a3a24699e42b9b36d48dc125af987.jpg" alt="Brand logo example" style="object-fit: contain; background: #fff;" />
+      <div class="cap"><strong>Brand Logo</strong>128×128 px recommended · max 2 MB</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/models/a251714f9f6f4541b89aae72808da39a.png" alt="Model image example" />
+      <div class="cap"><strong>Phone Model</strong>400×400 px recommended · max 4 MB</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/products/5b073169dd1e432884d211f64230ee87.png" alt="Case type example" />
+      <div class="cap"><strong>Case Type</strong>400×400 px recommended · max 4 MB</div>
+    </div>
+  </div>
+
+  <h2>Case Overlay Templates (PNG Frames)</h2>
+  <div class="preview-grid">
+    <div class="preview-card">
+      <img src="../backend/uploads/templates/a779f233535946d69c73d23bcb037354.png" alt="Template overlay" />
+      <div class="cap"><strong>Phone Frame PNG</strong>PNG only · mask zones for camera</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/templates/04210547bfa044d9b2c2af5806c7e77c.png" alt="Template overlay 2" />
+      <div class="cap"><strong>Case Overlay</strong>Canvas size from PNG dimensions</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/templates/d88f4574c8b24acf9c5cbb6752cade10.png" alt="Template overlay 3" />
+      <div class="cap"><strong>Transparent Frame</strong>Used in Fabric.js customizer</div>
+    </div>
+  </div>
+
+  <h2>Shop Template Products (5:4 Thumbnails)</h2>
+  <div class="preview-grid">
+    <div class="preview-card">
+      <img src="../backend/uploads/template-products/46229163940243fbb1d4c4dcb8a35e9f.png" alt="Template product" />
+      <div class="cap"><strong>Shop Thumbnail</strong>800×640 px · 5:4 ratio</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/template-products/37d05f4a23204a87b4fb0a61dc0c86e3.jpeg" alt="Template product 2" />
+      <div class="cap"><strong>Template Card</strong>Dark background recommended</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/template-products/b410933aefbb40a0897afd7bacdcbfe0.jpeg" alt="Template product 3" />
+      <div class="cap"><strong>Gallery Image</strong>Same 800×640 spec</div>
+    </div>
+  </div>
+
+  <h2>Customer Designs &amp; Payments</h2>
+  <div class="preview-grid">
+    <div class="preview-card">
+      <img src="../backend/uploads/designs/a25488ee058f49d4b736f372acfd4f0c.png" alt="Customer design" />
+      <div class="cap"><strong>Customer Artwork</strong>High-res portrait · max 12 MB</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/designs/6bacf97434ce43edae42f89ff2ec8c93.png" alt="Design preview" />
+      <div class="cap"><strong>Design Upload</strong>JPG · PNG · WEBP</div>
+    </div>
+    <div class="preview-card">
+      <img src="../backend/uploads/payments/2ab12baf75524fc5a9f4ec41671ab641.png" alt="Payment screenshot" />
+      <div class="cap"><strong>Payment Screenshot</strong>UPI proof · max 12 MB</div>
+    </div>
+  </div>
+</section>
+
+<!-- STOREFRONT -->
+<section id="storefront" class="page-break">
+  <h1 class="page-title">4. Storefront Pages &amp; Routes</h1>
+
+  <table>
+    <tr><th>Route</th><th>Page</th><th>Description</th><th>Auth</th></tr>
+    <tr><td><code>/</code></td><td>Home</td><td>Video hero, brand marquee, product showcase, collections, best sellers, FAQ, customize CTA</td><td>Public</td></tr>
+    <tr><td><code>/shop</code></td><td>Shop</td><td>Browse pre-designed template cases. Filter by category, brand, case type, collection, sort</td><td>Public</td></tr>
+    <tr><td><code>/template/:slug</code></td><td>Template Detail</td><td>Product page with gallery, phone model picker, add to cart / checkout</td><td>Public</td></tr>
+    <tr><td><code>/customize</code></td><td>Customize</td><td>4-step wizard: Brand → Model → Case type → Design (Fabric.js canvas)</td><td>Public</td></tr>
+    <tr><td><code>/checkout</code></td><td>Checkout</td><td>Shipping form (Indian states, pincode), promo code, order creation</td><td>Login required</td></tr>
+    <tr><td><code>/payment/:orderId</code></td><td>Payment</td><td>UPI QR, copy UPI ID, screenshot upload, UTR entry, WhatsApp link</td><td>Login required</td></tr>
+    <tr><td><code>/track</code></td><td>Order Status</td><td>Search by order ID</td><td>Public</td></tr>
+    <tr><td><code>/track/:orderId</code></td><td>Order Status</td><td>Delivery timeline, order details, design preview</td><td>Public</td></tr>
+    <tr><td><code>/login</code></td><td>Login</td><td>Customer email/password sign-in</td><td>Public</td></tr>
+    <tr><td><code>/register</code></td><td>Register</td><td>Create customer account</td><td>Public</td></tr>
+    <tr><td><code>/profile</code></td><td>Profile</td><td>Account details, order history</td><td>Login required</td></tr>
+    <tr><td><code>*</code></td><td>404 Not Found</td><td>Custom 404 page with hero image</td><td>Public</td></tr>
+  </table>
+
+  <h2>Customizer Flow (4 Steps)</h2>
+  <ol>
+    <li><strong>Choose brand</strong> — Apple, Samsung, OnePlus, Vivo, Oppo, Xiaomi, Google Pixel</li>
+    <li><strong>Choose model</strong> — Exact phone model (e.g. iPhone 15 Pro Max)</li>
+    <li><strong>Choose case type</strong> — Silicone (₹299), Transparent (₹349), Matte (₹399), Glass (₹499)</li>
+    <li><strong>Design</strong> — Upload artwork, drag/zoom/rotate on live canvas with phone frame overlay</li>
+  </ol>
+
+  <h2>Shop Template Categories</h2>
+  <p>Anime, Gaming, Luxury, Minimal, Nature, Abstract, Sports, Travel, Cars, Quotes, Photography, Premium</p>
+
+  <h2>Collections</h2>
+  <p>Essentials, Limited Edition, Artist Series, Seasonal, Collab</p>
+</section>
+
+<!-- ADMIN -->
+<section id="admin" class="page-break">
+  <h1 class="page-title">5. Admin Dashboard</h1>
+  <p>Access at <code>/admin/login</code>. JWT authentication with HTTP-only cookies. Seeded from <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> in backend <code>.env</code>.</p>
+
+  <table>
+    <tr><th>Route</th><th>Section</th><th>What You Manage</th></tr>
+    <tr><td><code>/admin</code></td><td>Dashboard</td><td>Analytics: total orders, pending review, approved, shipped, revenue. Recent orders table.</td></tr>
+    <tr><td><code>/admin/orders</code></td><td>Orders</td><td>Filter by status, approve/reject payments, update delivery stages, view design &amp; payment screenshots</td></tr>
+    <tr><td><code>/admin/template-products</code></td><td>Templates (Shop)</td><td>Pre-designed cases for sale: title, price, category, thumbnail (800×640), gallery, stock, SKU</td></tr>
+    <tr><td><code>/admin/catalog</code></td><td>Brands &amp; Products</td><td>Phone brands (128×128 logo), models (400×400), case types (400×400 + price)</td></tr>
+    <tr><td><code>/admin/catalog/templates</code></td><td>Case Overlays</td><td>Phone frame PNG templates with camera mask zones per brand/model/case type</td></tr>
+    <tr><td><code>/admin/promo-codes</code></td><td>Promo Codes</td><td>Discount codes: percentage or flat amount, usage limits, expiry</td></tr>
+    <tr><td><code>/admin/popup-offers</code></td><td>Popup Offers</td><td>Homepage promotional popups (800×1000 px), schedule, enable/disable</td></tr>
+    <tr><td><code>/admin/settings</code></td><td>Settings</td><td>UPI ID, merchant name, WhatsApp number, currency</td></tr>
+  </table>
+</section>
+
+<!-- ORDER FLOW -->
+<section id="order-flow" class="page-break">
+  <h1 class="page-title">6. Order &amp; Payment Flow</h1>
+
+  <div class="flow">
+    Home → Shop or Customize → Checkout → Payment (UPI) → Track Order
+  </div>
+
+  <h2>Custom Order Path</h2>
+  <ol>
+    <li>Customer selects brand, model, case type in Customizer</li>
+    <li>Uploads artwork and positions on Fabric.js canvas</li>
+    <li>Design + preview PNG uploaded to backend; draft saved in sessionStorage</li>
+    <li>Customer fills shipping at Checkout → order created (ID: <code>FRM-YYMMDD-XXXXXX</code>)</li>
+    <li>Customer pays via UPI, uploads screenshot, enters UTR</li>
+    <li>Admin verifies payment in Orders panel</li>
+    <li>Customer tracks delivery on Order Status page</li>
+  </ol>
+
+  <h2>Template Shop Path</h2>
+  <ol>
+    <li>Customer browses Shop, picks pre-designed template</li>
+    <li>Selects phone model on Template Detail page</li>
+    <li>Checkout → Payment → Track (same as custom)</li>
+  </ol>
+
+  <h2>Payment Statuses</h2>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>pending</code></td><td>Order created, no payment proof yet</td></tr>
+    <tr><td><code>submitted</code></td><td>Customer uploaded screenshot and UTR</td></tr>
+    <tr><td><code>approved</code></td><td>Admin verified payment</td></tr>
+    <tr><td><code>rejected</code></td><td>Payment rejected by admin</td></tr>
+  </table>
+
+  <h2>Delivery Statuses</h2>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>pending_payment_verification</code></td><td>Awaiting payment review</td></tr>
+    <tr><td><code>payment_approved</code></td><td>Payment confirmed</td></tr>
+    <tr><td><code>printing</code></td><td>Case is being printed</td></tr>
+    <tr><td><code>packed</code></td><td>Order packed</td></tr>
+    <tr><td><code>shipped</code></td><td>Out for delivery</td></tr>
+    <tr><td><code>delivered</code></td><td>Delivered to customer</td></tr>
+  </table>
+</section>
+
+<!-- API -->
+<section id="api" class="page-break">
+  <h1 class="page-title">7. API &amp; Technical Reference</h1>
+  <p>Base URL: <code>{BACKEND_URL}/api</code> (default: <code>http://localhost:8000/api</code>)</p>
+
+  <h2>Upload Endpoints</h2>
+  <table>
+    <tr><th>Method</th><th>Endpoint</th><th>Auth</th><th>Purpose</th></tr>
+    <tr><td>POST</td><td><code>/upload/design</code></td><td>—</td><td>Customer artwork</td></tr>
+    <tr><td>POST</td><td><code>/upload/preview</code></td><td>—</td><td>Canvas preview PNG</td></tr>
+    <tr><td>POST</td><td><code>/upload/payment</code></td><td>User</td><td>Payment screenshot</td></tr>
+  </table>
+  <p>Static files served at: <code>/api/uploads/{designs|payments|templates|brands|models|products|template-products|popups}/&lt;filename&gt;</code></p>
+
+  <h2>Environment Variables</h2>
+  <div class="two-col">
+    <div>
+      <h3>Backend (.env)</h3>
+      <ul>
+        <li><code>MONGO_URL</code> — MongoDB connection</li>
+        <li><code>DB_NAME</code> — Database name</li>
+        <li><code>JWT_SECRET</code> — Token signing</li>
+        <li><code>ADMIN_EMAIL</code> / <code>ADMIN_PASSWORD</code></li>
+        <li><code>PORT</code> — default 8000</li>
+        <li><code>PUBLIC_BASE_URL</code> — upload URL prefix</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Frontend (.env)</h3>
+      <ul>
+        <li><code>REACT_APP_BACKEND_URL</code> — API base URL</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Getting Started</h2>
+  <pre style="background:#f5f5f5;padding:14px;border-radius:8px;font-size:0.8rem;overflow-x:auto;">
+# Backend
+cd backend && npm install && npm start
+
+# Frontend
+cd frontend && npm install && npm start
+
+# Admin login at http://localhost:3000/admin/login
+  </pre>
+</section>
+
+<!-- DESIGN -->
+<section id="design" class="page-break">
+  <h1 class="page-title">8. Design System</h1>
+
+  <table>
+    <tr><th>Token</th><th>Value</th><th>Usage</th></tr>
+    <tr><td>Primary</td><td><span style="color:#ff4f00">#FF4F00</span></td><td>CTAs, accents, highlights</td></tr>
+    <tr><td>Background</td><td>#09090B</td><td>Page background</td></tr>
+    <tr><td>Text primary</td><td>#FFFFFF</td><td>Headings, body on dark</td></tr>
+    <tr><td>Text secondary</td><td>#A1A1AA</td><td>Supporting text</td></tr>
+    <tr><td>Success</td><td>#10B981</td><td>Confirmations</td></tr>
+    <tr><td>Error</td><td>#EF4444</td><td>Errors, delete actions</td></tr>
+  </table>
+
+  <h2>Typography</h2>
+  <ul>
+    <li><strong>Headings:</strong> Clash Display</li>
+    <li><strong>Body:</strong> Satoshi</li>
+    <li><strong>Labels / mono:</strong> JetBrains Mono</li>
+  </ul>
+
+  <h2>UI Patterns</h2>
+  <ul>
+    <li><strong>Crystal glass:</strong> Frosted glass cards with subtle borders</li>
+    <li><strong>Border radius:</strong> rounded-2xl for cards, rounded-lg for buttons</li>
+    <li><strong>Icons:</strong> Lucide / Phosphor for premium hardware feel</li>
+    <li><strong>Theme:</strong> Dark luxury (Archetype 5) — no purple/teal accents</li>
+  </ul>
+
+  <p style="margin-top:32px;color:#888;font-size:0.85rem;text-align:center;">
+    CASEBOX · Complete Documentation · © CASEBOX · All rights reserved
+  </p>
+</section>
+
+</body>
+</html>

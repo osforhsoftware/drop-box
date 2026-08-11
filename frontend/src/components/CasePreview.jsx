@@ -25,13 +25,6 @@ export default function CasePreview({ imageUrl, model, productSlug = "silicone" 
           Your design here
         </div>
       )}
-      {/* camera bump */}
-      <div className="absolute top-4 left-4 w-[90px] h-[90px] rounded-[28px] bg-black/80 border border-white/10 backdrop-blur grid grid-cols-2 gap-2 p-3">
-        <div className="rounded-full bg-zinc-900 border border-white/10" />
-        <div className="rounded-full bg-zinc-900 border border-white/10" />
-        <div className="rounded-full bg-zinc-900 border border-white/10" />
-        <div className="rounded-full bg-zinc-900 border border-white/10" />
-      </div>
       {/* glare */}
       <div className="absolute inset-0 pointer-events-none bg-gradient-to-tr from-white/0 via-white/[0.06] to-white/0" />
       {model && (
