@@ -31,7 +31,10 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+.env
+.env.*
+!.env.example
+*.env
 *token.json*
 *credentials.json*
 
@@ -75,7 +78,10 @@ android-sdk/frontend/node_modules/.cache/default-development/4.pack
 .env.*
 !.env.example
 *.env
+!.env.example
 credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/0.pack
+uploads/**/*
+!uploads/**/.gitkeep

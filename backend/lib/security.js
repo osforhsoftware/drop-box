@@ -126,6 +126,13 @@ const googleAuthRateLimiter = createRateLimiter({
   message: "Too many sign-in attempts. Please try again later.",
 });
 
+/** Tight limit to deter brute-force signature guessing on verify-payment. */
+const verifyPaymentRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.VERIFY_PAYMENT_RATE_LIMIT) || 20,
+  message: "Too many payment verification attempts. Please try again later.",
+});
+
 function validateStartupSecrets() {
   const secret = process.env.JWT_SECRET || "";
   if (!secret || secret.length < 32) {
@@ -300,6 +307,7 @@ module.exports = {
   uploadRateLimiter,
   orderRateLimiter,
   googleAuthRateLimiter,
+  verifyPaymentRateLimiter,
   botProtection,
   getClientIp,
   authDelay,
