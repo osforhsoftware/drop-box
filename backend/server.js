@@ -70,6 +70,7 @@ const {
   apiRateLimiter,
   uploadRateLimiter,
   orderRateLimiter,
+  googleAuthRateLimiter,
   botProtection,
   getClientIp,
   authDelay,
@@ -93,6 +94,35 @@ const {
   normalizeOrderAddress,
   fetchIndiaPostPincode,
 } = require("./lib/indianAddress");
+const {
+  OAUTH_COOKIE,
+  LOGIN_CODE_TTL_MS,
+  googleConfigured,
+  getGoogleCallbackUrl,
+  getFrontendUrl,
+  getOAuthClient,
+  oauthCookieOpts,
+  createOAuthContext,
+  readOAuthContext,
+  buildGoogleAuthUrl,
+  verifyGoogleAuthorizationCode,
+  hashLoginCode,
+  createLoginCode,
+  frontendLoginUrl,
+} = require("./lib/googleAuth");
+const { findOrCreateGoogleCustomer } = require("./lib/googleCustomer");
+const {
+  getRazorpayConfig,
+  rupeesToPaise,
+  verifyCheckoutSignature,
+  verifyWebhookSignature,
+  createRazorpayOrder,
+  fetchRazorpayPayment,
+  publicSettings,
+  settingsUpdateFromBody,
+  paidUpdateFromPayment,
+  webhookPaymentEntity,
+} = require("./lib/razorpay");
 
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
@@ -416,6 +446,7 @@ function toPublicUser(user) {
     name: user.name,
     role: user.role,
     phone: user.phone || null,
+    profile_picture: user.profile_picture || null,
     address: user.address || null,
     formatted_address: user.formatted_address || user.address || null,
     house_no_flat: user.house_no_flat || null,
@@ -457,12 +488,15 @@ async function saveUserShipping(userId, fields) {
 }
 
 function extractToken(req) {
-  let token = req.cookies?.access_token;
-  if (!token) {
-    const auth = req.headers.authorization || "";
-    if (auth.startsWith("Bearer ")) token = auth.slice(7);
+  // Prefer the SPA Bearer token over the httpOnly cookie. A leftover admin
+  // cookie (from /admin/login) must not override a customer Google session
+  // stored in localStorage — that mismatch returns 403 on checkout.
+  const auth = req.headers.authorization || "";
+  if (auth.startsWith("Bearer ")) {
+    const bearer = auth.slice(7).trim();
+    if (bearer) return bearer;
   }
-  return token;
+  return req.cookies?.access_token || null;
 }
 
 async function getCurrentUser(req, res, next) {
@@ -757,7 +791,14 @@ app.use(
   })
 );
 app.use(cookieParser());
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({
+  limit: "256kb",
+  verify: (req, _res, buf) => {
+    if (req.originalUrl === "/api/webhooks/razorpay") {
+      req.rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use("/api/uploads", express.static(UPLOAD_DIR, {
   dotfiles: "deny",
   index: false,
@@ -794,7 +835,7 @@ api.post("/auth/login", botProtection, async (req, res) => {
   }
 
   const user = await db.collection("users").findOne({ email: emailNorm });
-  const valid = user && verifyPassword(password, user.password_hash);
+  const valid = user && user.role === "admin" && verifyPassword(password, user.password_hash);
   if (!valid) {
     const failure = await recordLoginFailure(db, emailNorm, ip);
     await authDelay(failure.delayMs);
@@ -810,45 +851,144 @@ api.post("/auth/login", botProtection, async (req, res) => {
   });
 });
 
-api.post("/auth/register", registerRateLimiter, botProtection, async (req, res) => {
-  const ip = getClientIp(req);
-  const quota = await checkRegisterQuota(db, ip);
-  if (!quota.allowed) {
-    return res.status(429).json({ detail: "Too many accounts created from this network. Try again later." });
+api.post("/auth/register", registerRateLimiter, (_req, res) => {
+  return res.status(410).json({
+    detail: "Customer accounts now use Google Sign-In. Please continue with Google.",
+  });
+});
+
+function googleFrontendRedirect(res, { next, code, error }) {
+  return res.redirect(frontendLoginUrl(getFrontendUrl(), { next, code, error }));
+}
+
+async function issueGoogleLogin(res, user, nextPath) {
+  const token = createToken(user.id, user.email);
+  res.cookie("access_token", token, cookieOpts);
+
+  const { raw, key } = createLoginCode();
+  await db.collection("auth_security").updateOne(
+    { type: "google_login_code", key },
+    {
+      $set: {
+        user_id: user.id,
+        expires_at: new Date(Date.now() + LOGIN_CODE_TTL_MS),
+        updated_at: nowIso(),
+      },
+      $setOnInsert: { type: "google_login_code", key, created_at: nowIso() },
+    },
+    { upsert: true }
+  );
+
+  return googleFrontendRedirect(res, { next: nextPath, code: raw });
+}
+
+api.get("/auth/google", googleAuthRateLimiter, (req, res) => {
+  if (!googleConfigured()) {
+    return googleFrontendRedirect(res, { error: "google_not_configured", next: req.query?.next });
   }
 
-  const name = clampString(req.body?.name, 100);
-  const emailNorm = validateEmail(req.body?.email);
-  const password = req.body?.password;
-  const phone = validateIndianPhone(req.body?.phone);
+  const callbackUrl = getGoogleCallbackUrl(PORT, PUBLIC_BASE_URL);
+  const ctx = createOAuthContext({ next: req.query?.next, jwtSecret: JWT_SECRET });
+  const client = getOAuthClient(callbackUrl);
+  const url = buildGoogleAuthUrl(client, {
+    state: ctx.nonce,
+    codeChallenge: ctx.codeChallenge,
+  });
 
-  if (!name || !emailNorm || !password || !phone) {
-    return res.status(400).json({ detail: "Name, email, phone, and password required" });
-  }
-  if (!validatePassword(password)) {
-    return res.status(400).json({ detail: "Password must be 8–128 characters" });
+  res.cookie(OAUTH_COOKIE, ctx.cookieValue, oauthCookieOpts(isProd));
+  return res.redirect(url);
+});
+
+api.get("/auth/google/callback", googleAuthRateLimiter, async (req, res) => {
+  const clearOauthCookie = () => res.clearCookie(OAUTH_COOKIE, { ...oauthCookieOpts(isProd), maxAge: 0 });
+
+  if (req.query?.error) {
+    clearOauthCookie();
+    const denied = String(req.query.error) === "access_denied";
+    return googleFrontendRedirect(res, { error: denied ? "denied" : "google" });
   }
 
-  const existing = await db.collection("users").findOne({ email: emailNorm });
-  if (existing) {
-    await authDelay();
-    return res.status(400).json({ detail: "Unable to create account. Try a different email or sign in." });
+  const ctx = readOAuthContext(req.cookies?.[OAUTH_COOKIE], req.query?.state, JWT_SECRET);
+  clearOauthCookie();
+  if (!ctx) {
+    return googleFrontendRedirect(res, { error: "google" });
   }
 
-  const user = {
-    id: crypto.randomUUID(),
-    email: emailNorm,
-    password_hash: hashPassword(password),
-    name,
-    role: "customer",
-    phone,
-    address: null,
-    state: null,
-    pincode: null,
-    created_at: nowIso(),
-  };
-  await db.collection("users").insertOne(user);
-  await recordRegisterAttempt(db, ip);
+  const code = String(req.query?.code || "");
+  if (!code) {
+    return googleFrontendRedirect(res, { error: "google", next: ctx.next });
+  }
+
+  try {
+    if (!googleConfigured()) {
+      return googleFrontendRedirect(res, { error: "google_not_configured", next: ctx.next });
+    }
+
+    const callbackUrl = getGoogleCallbackUrl(PORT, PUBLIC_BASE_URL);
+    const client = getOAuthClient(callbackUrl);
+    const identity = await verifyGoogleAuthorizationCode(client, {
+      code,
+      codeVerifier: ctx.codeVerifier,
+      clientId: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const ip = getClientIp(req);
+    const result = await findOrCreateGoogleCustomer(db.collection("users"), identity, {
+      canCreate: async () => {
+        const quota = await checkRegisterQuota(db, ip);
+        return quota.allowed;
+      },
+      onCreated: async () => {
+        await recordRegisterAttempt(db, ip);
+      },
+    });
+
+    if (result.error === "admin_not_allowed") {
+      return googleFrontendRedirect(res, { error: "admin", next: ctx.next });
+    }
+    if (result.error === "rate_limit") {
+      return googleFrontendRedirect(res, { error: "rate_limit", next: ctx.next });
+    }
+    if (result.error === "email_unverified") {
+      return googleFrontendRedirect(res, { error: "unverified", next: ctx.next });
+    }
+    if (result.error || !result.user) {
+      return googleFrontendRedirect(res, { error: "google", next: ctx.next });
+    }
+    if (result.user.role !== "customer") {
+      return googleFrontendRedirect(res, { error: "admin", next: ctx.next });
+    }
+
+    return issueGoogleLogin(res, result.user, ctx.next);
+  } catch (err) {
+    console.error("Google sign-in failed:", err?.message || "unknown error");
+    return googleFrontendRedirect(res, { error: "google", next: ctx.next });
+  }
+});
+
+api.post("/auth/google/exchange", googleAuthRateLimiter, async (req, res) => {
+  const raw = String(req.body?.code || "").trim();
+  if (!raw || raw.length > 128) {
+    return res.status(400).json({ detail: "Invalid sign-in code" });
+  }
+
+  const key = hashLoginCode(raw);
+  const rec = await db.collection("auth_security").findOneAndDelete({
+    type: "google_login_code",
+    key,
+  });
+  const ticket = rec?.value || rec;
+  if (!ticket?.user_id) {
+    return res.status(401).json({ detail: "Sign-in expired. Please try Google again." });
+  }
+  if (ticket.expires_at && new Date(ticket.expires_at) < new Date()) {
+    return res.status(401).json({ detail: "Sign-in expired. Please try Google again." });
+  }
+
+  const user = await db.collection("users").findOne({ id: ticket.user_id });
+  if (!user || user.role !== "customer") {
+    return res.status(401).json({ detail: "Sign-in expired. Please try Google again." });
+  }
 
   const token = createToken(user.id, user.email);
   res.cookie("access_token", token, cookieOpts);
@@ -894,7 +1034,12 @@ api.patch("/profile", getCurrentUser, async (req, res) => {
 });
 
 api.post("/auth/logout", (req, res) => {
-  res.clearCookie("access_token", { path: "/" });
+  res.clearCookie("access_token", {
+    path: cookieOpts.path,
+    secure: cookieOpts.secure,
+    sameSite: cookieOpts.sameSite,
+    httpOnly: cookieOpts.httpOnly,
+  });
   res.json({ ok: true });
 });
 
@@ -2529,6 +2674,189 @@ api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => 
   res.json(o2);
 });
 
+function assertOrderAccess(order, user) {
+  if (order.user_id && order.user_id !== user.id && user.role !== "admin") {
+    return { status: 403, detail: "Not authorized for this order" };
+  }
+  return null;
+}
+
+async function markOrderPaid(order, payment, extras = {}) {
+  const set = { ...paidUpdateFromPayment(order, payment, extras), updated_at: nowIso() };
+  await db.collection("orders").updateOne({ order_id: order.order_id }, { $set: set });
+  return db.collection("orders").findOne({ order_id: order.order_id }, { projection: { _id: 0 } });
+}
+
+api.post("/orders/:order_id/razorpay-order", getCurrentUser, async (req, res) => {
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
+  }
+  const settings = await db.collection("settings").findOne({ id: "main" });
+  if (publicSettings(settings).payment_method !== "razorpay") {
+    return res.status(400).json({ detail: "Razorpay is not enabled" });
+  }
+  const cfg = getRazorpayConfig();
+  if (!cfg.configured) {
+    return res.status(503).json({ detail: "Razorpay is not configured on the server" });
+  }
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  if (!order) return res.status(404).json({ detail: "Order not found" });
+  const denied = assertOrderAccess(order, req.user);
+  if (denied) return res.status(denied.status).json({ detail: denied.detail });
+  if (order.payment_status === "approved") {
+    return res.status(400).json({ detail: "This order is already paid" });
+  }
+
+  const amountPaise = rupeesToPaise(order.amount);
+  if (!amountPaise) {
+    return res.status(400).json({ detail: "Invalid order amount" });
+  }
+
+  if (
+    order.razorpay_order_id
+    && Number(order.razorpay_amount_paise) === amountPaise
+  ) {
+    return res.json({
+      key_id: cfg.keyId,
+      amount: amountPaise,
+      currency: "INR",
+      razorpay_order_id: order.razorpay_order_id,
+    });
+  }
+
+  try {
+    const rzpOrder = await createRazorpayOrder({
+      amountPaise,
+      currency: "INR",
+      receipt: order.order_id,
+      notes: { order_id: order.order_id },
+      keyId: cfg.keyId,
+      keySecret: cfg.keySecret,
+    });
+    await db.collection("orders").updateOne(
+      { order_id: order.order_id },
+      {
+        $set: {
+          payment_method: "razorpay",
+          razorpay_order_id: rzpOrder.id,
+          razorpay_amount_paise: amountPaise,
+          updated_at: nowIso(),
+        },
+      }
+    );
+    res.json({
+      key_id: cfg.keyId,
+      amount: amountPaise,
+      currency: rzpOrder.currency || "INR",
+      razorpay_order_id: rzpOrder.id,
+    });
+  } catch (err) {
+    console.error("Razorpay order create failed:", err.message);
+    res.status(err.status || 502).json({ detail: err.message || "Could not start Razorpay checkout" });
+  }
+});
+
+api.post("/orders/:order_id/verify-payment", getCurrentUser, async (req, res) => {
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
+  }
+  const cfg = getRazorpayConfig();
+  if (!cfg.configured) {
+    return res.status(503).json({ detail: "Razorpay is not configured on the server" });
+  }
+  const razorpay_order_id = clampString(req.body?.razorpay_order_id, 64);
+  const razorpay_payment_id = clampString(req.body?.razorpay_payment_id, 64);
+  const razorpay_signature = clampString(req.body?.razorpay_signature, 128);
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    return res.status(400).json({ detail: "Missing Razorpay payment details" });
+  }
+
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  if (!order) return res.status(404).json({ detail: "Order not found" });
+  const denied = assertOrderAccess(order, req.user);
+  if (denied) return res.status(denied.status).json({ detail: denied.detail });
+  if (order.payment_status === "approved") {
+    const paid = { ...order };
+    delete paid._id;
+    return res.json(paid);
+  }
+  if (order.razorpay_order_id && order.razorpay_order_id !== razorpay_order_id) {
+    return res.status(400).json({ detail: "Razorpay order does not match this CASEBOX order" });
+  }
+
+  const valid = verifyCheckoutSignature({
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    keySecret: cfg.keySecret,
+  });
+  if (!valid) {
+    return res.status(400).json({ detail: "Payment signature verification failed" });
+  }
+
+  let payment = { id: razorpay_payment_id, order_id: razorpay_order_id };
+  try {
+    payment = await fetchRazorpayPayment(razorpay_payment_id, {
+      keyId: cfg.keyId,
+      keySecret: cfg.keySecret,
+    });
+    const expectedPaise = rupeesToPaise(order.amount);
+    if (expectedPaise && Number(payment.amount) !== expectedPaise) {
+      return res.status(400).json({ detail: "Paid amount does not match this order" });
+    }
+    if (payment.order_id && payment.order_id !== razorpay_order_id) {
+      return res.status(400).json({ detail: "Payment does not belong to this Razorpay order" });
+    }
+    const status = String(payment.status || "");
+    if (status && status !== "captured" && status !== "authorized") {
+      return res.status(400).json({ detail: `Payment is ${status}` });
+    }
+  } catch (err) {
+    console.error("Razorpay payment fetch failed:", err.message);
+  }
+
+  const updated = await markOrderPaid(order, payment, {
+    razorpay_order_id,
+    razorpay_payment_id,
+    amountPaise: rupeesToPaise(order.amount),
+  });
+  res.json(updated);
+});
+
+api.post("/webhooks/razorpay", async (req, res) => {
+  const cfg = getRazorpayConfig();
+  if (!cfg.webhookConfigured) {
+    return res.status(503).json({ detail: "Razorpay webhook is not configured" });
+  }
+  const signature = req.headers["x-razorpay-signature"];
+  const raw = req.rawBody;
+  if (!verifyWebhookSignature(raw, signature, cfg.webhookSecret)) {
+    return res.status(400).json({ detail: "Invalid webhook signature" });
+  }
+
+  const event = req.body?.event;
+  if (event !== "payment.captured" && event !== "order.paid") {
+    return res.json({ ok: true });
+  }
+
+  const payment = webhookPaymentEntity(req.body);
+  if (!payment?.id) return res.json({ ok: true });
+
+  const shopOrderId = payment.notes?.order_id;
+  const order = shopOrderId
+    ? await db.collection("orders").findOne({ order_id: shopOrderId })
+    : await db.collection("orders").findOne({ razorpay_order_id: payment.order_id });
+  if (!order) return res.json({ ok: true });
+  if (order.payment_status === "approved") return res.json({ ok: true });
+
+  await markOrderPaid(order, payment, {
+    razorpay_order_id: payment.order_id,
+    razorpay_payment_id: payment.id,
+    amountPaise: payment.amount,
+  });
+  res.json({ ok: true });
+});
+
 api.get("/admin/orders", getCurrentAdmin, async (req, res) => {
   const items = await db.collection("orders").find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(500).toArray();
   res.json(items);
@@ -2861,14 +3189,17 @@ api.get("/settings", async (req, res) => {
     s = { id: "main", upi_id: "merchant@upi", merchant_name: "CASEBOX", whatsapp_number: "+919999999999", currency: "INR" };
     await db.collection("settings").insertOne(s);
   }
-  res.json(s);
+  res.json(publicSettings(s));
 });
 
 api.put("/settings", getCurrentAdmin, async (req, res) => {
-  const update = req.body;
+  const update = settingsUpdateFromBody(req.body);
+  if (Object.keys(update).length === 0) {
+    return res.status(400).json({ detail: "No settings to update" });
+  }
   await db.collection("settings").updateOne({ id: "main" }, { $set: update }, { upsert: true });
   const s = await db.collection("settings").findOne({ id: "main" }, { projection: { _id: 0 } });
-  res.json(s);
+  res.json(publicSettings(s));
 });
 
 // --- Health ---
@@ -2876,11 +3207,19 @@ api.get("/", (req, res) => {
   res.json({ status: "ok", service: "CASEBOX" });
 });
 
+api.use((req, res) => {
+  res.status(404).json({ detail: "Not found" });
+});
+
 app.use("/api", api);
 
 async function seed() {
   await ensureSecurityIndexes(db);
   await db.collection("users").createIndex("email", { unique: true });
+  await db.collection("users").createIndex(
+    { google_id: 1 },
+    { unique: true, sparse: true }
+  );
   await db.collection("brands").createIndex("id", { unique: true });
   await db.collection("models").createIndex("id", { unique: true });
   await db.collection("products").createIndex("id", { unique: true });
@@ -2891,6 +3230,7 @@ async function seed() {
   );
   await db.collection("orders").createIndex("order_id", { unique: true });
   await db.collection("orders").createIndex("user_id");
+  await db.collection("orders").createIndex("razorpay_order_id");
   await db.collection("templates").createIndex("id", { unique: true });
   await db.collection("templates").createIndex({ model_id: 1, case_type_slug: 1 });
   await db.collection("promo_codes").createIndex("id", { unique: true });

@@ -120,6 +120,12 @@ const orderRateLimiter = createRateLimiter({
   message: "Too many orders placed. Please try again later.",
 });
 
+const googleAuthRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.GOOGLE_AUTH_RATE_LIMIT) || 20,
+  message: "Too many sign-in attempts. Please try again later.",
+});
+
 function validateStartupSecrets() {
   const secret = process.env.JWT_SECRET || "";
   if (!secret || secret.length < 32) {
@@ -130,6 +136,14 @@ function validateStartupSecrets() {
   }
   if (isProd && !process.env.CORS_ORIGINS) {
     console.warn("[security] Set CORS_ORIGINS in production to restrict API access.");
+  }
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    console.warn("[security] GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required for customer Google Sign-In.");
+  }
+  const rzpKey = process.env.RAZORPAY_KEY_ID || "";
+  const rzpSecret = process.env.RAZORPAY_KEY_SECRET || "";
+  if (rzpKey && (!rzpSecret || /^change_me/i.test(rzpSecret))) {
+    console.warn("[security] RAZORPAY_KEY_ID is set but RAZORPAY_KEY_SECRET is missing or still a placeholder.");
   }
 }
 
@@ -157,6 +171,10 @@ async function ensureSecurityIndexes(db) {
   await db.collection("auth_security").createIndex(
     { locked_until: 1 },
     { expireAfterSeconds: 0, partialFilterExpression: { locked_until: { $type: "date" } } }
+  );
+  await db.collection("auth_security").createIndex(
+    { expires_at: 1 },
+    { expireAfterSeconds: 0, partialFilterExpression: { expires_at: { $type: "date" } } }
   );
 }
 
@@ -281,6 +299,7 @@ module.exports = {
   apiRateLimiter,
   uploadRateLimiter,
   orderRateLimiter,
+  googleAuthRateLimiter,
   botProtection,
   getClientIp,
   authDelay,

@@ -73,6 +73,7 @@ mongodb-backup.zip
 android-sdk/frontend/node_modules/.cache/default-development/4.pack
 .env
 .env.*
+!.env.example
 *.env
 credentials.json
 *.key
