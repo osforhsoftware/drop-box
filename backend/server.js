@@ -1481,13 +1481,17 @@ const LEGACY_CASE_TYPE_SLUGS = {
   "transparent-case": "transparent",
   "matte-case": "matte",
 };
+const DEFAULT_TEMPLATE_SLUG = "_default";
 
-api.get("/templates", async (req, res) => {
-  const { model_id, case_type_slug } = req.query;
-  if (!model_id || !case_type_slug) {
-    return res.status(400).json({ detail: "model_id and case_type_slug required" });
-  }
-  const query = { model_id, enabled: true };
+/** Parse multipart/json flags such as is_default=true */
+
+function isTruthyFlag(val) {
+  return val === true || val === "true" || val === "1" || val === 1;
+}
+
+async function findModelOverlayTemplate(model_id, case_type_slug) {
+  if (!model_id || !case_type_slug) return null;
+  const query = { model_id, enabled: true, is_default: { $ne: true } };
   let tpl = await db.collection("templates").findOne(
     { ...query, case_type_slug },
     { projection: { _id: 0 } }
@@ -1501,14 +1505,43 @@ api.get("/templates", async (req, res) => {
       );
     }
   }
+  return tpl;
+}
+
+async function findDefaultOverlayTemplate() {
+  return db.collection("templates").findOne(
+    { is_default: true, enabled: true },
+    { projection: { _id: 0 } }
+  );
+}
+
+async function resolvePrintTemplate({ template_id, model_id, case_type_slug } = {}) {
+  if (template_id) {
+    const byId = await db.collection("templates").findOne(
+      { id: template_id, enabled: true },
+      { projection: { _id: 0 } }
+    );
+    if (byId) return byId;
+  }
+  const specific = await findModelOverlayTemplate(model_id, case_type_slug);
+  if (specific) return specific;
+  return findDefaultOverlayTemplate();
+}
+
+api.get("/templates", async (req, res) => {
+  const { model_id, case_type_slug } = req.query;
+  if (!model_id || !case_type_slug) {
+    return res.status(400).json({ detail: "model_id and case_type_slug required" });
+  }
+  const tpl = await resolvePrintTemplate({ model_id, case_type_slug });
   if (!tpl) return res.status(404).json({ error: "no_template" });
   res.json(enrichTemplate(tpl));
 });
 
 api.get("/admin/templates", getCurrentAdmin, async (req, res) => {
   const templates = await db.collection("templates").find({}, { projection: { _id: 0 } }).toArray();
-  const brandIds = [...new Set(templates.map((t) => t.brand_id))];
-  const modelIds = [...new Set(templates.map((t) => t.model_id))];
+  const brandIds = [...new Set(templates.map((t) => t.brand_id).filter(Boolean))];
+  const modelIds = [...new Set(templates.map((t) => t.model_id).filter(Boolean))];
   const [brands, models] = await Promise.all([
     db.collection("brands").find({ id: { $in: brandIds } }, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
     db.collection("models").find({ id: { $in: modelIds } }, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
@@ -1518,37 +1551,43 @@ api.get("/admin/templates", getCurrentAdmin, async (req, res) => {
   const enriched = templates
     .map((t) => ({
       ...enrichTemplate(t),
-      brand_name: brandMap[t.brand_id] || "",
-      model_name: modelMap[t.model_id] || "",
+      is_default: Boolean(t.is_default),
+      brand_name: t.is_default ? "Default" : (brandMap[t.brand_id] || ""),
+      model_name: t.is_default ? "All models & case types" : (modelMap[t.model_id] || ""),
     }))
     .sort((a, b) => {
+      if (a.is_default && !b.is_default) return -1;
+      if (!a.is_default && b.is_default) return 1;
       const bc = a.brand_name.localeCompare(b.brand_name);
       if (bc !== 0) return bc;
       const mc = a.model_name.localeCompare(b.model_name);
       if (mc !== 0) return mc;
-      return a.case_type_slug.localeCompare(b.case_type_slug);
+      return String(a.case_type_slug || "").localeCompare(String(b.case_type_slug || ""));
     });
   res.json(enriched);
 });
 
 api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, res) => {
+  const isDefault = isTruthyFlag(req.body?.is_default);
   const { model_id, brand_id, case_type_slug } = req.body || {};
-  if (!model_id || !brand_id || !case_type_slug) {
+  if (!isDefault && (!model_id || !brand_id || !case_type_slug)) {
     return res.status(400).json({ detail: "model_id, brand_id, and case_type_slug required" });
   }
-  const [brand, model, product] = await Promise.all([
-    db.collection("brands").findOne({ id: brand_id }),
-    db.collection("models").findOne({ id: model_id, brand_id }),
-    db.collection("products").findOne({ slug: case_type_slug }),
-  ]);
-  if (!brand) return res.status(404).json({ detail: "Brand not found" });
-  if (!model) return res.status(400).json({ detail: "Model does not belong to this brand" });
-  const relation = product && await db.collection("phone_model_case_types").findOne({
-    phone_model_id: model_id,
-    case_type_id: product.id,
-  });
-  if (!modelCaseTypeIsEnabled(relation, product)) {
-    return res.status(400).json({ detail: "This case type is not enabled for the selected model" });
+  if (!isDefault) {
+    const [brand, model, product] = await Promise.all([
+      db.collection("brands").findOne({ id: brand_id }),
+      db.collection("models").findOne({ id: model_id, brand_id }),
+      db.collection("products").findOne({ slug: case_type_slug }),
+    ]);
+    if (!brand) return res.status(404).json({ detail: "Brand not found" });
+    if (!model) return res.status(400).json({ detail: "Model does not belong to this brand" });
+    const relation = product && await db.collection("phone_model_case_types").findOne({
+      phone_model_id: model_id,
+      case_type_id: product.id,
+    });
+    if (!modelCaseTypeIsEnabled(relation, product)) {
+      return res.status(400).json({ detail: "This case type is not enabled for the selected model" });
+    }
   }
   const dims = parseCanvasDims(req.body);
   if (dims.error) return res.status(400).json({ detail: dims.error });
@@ -1557,7 +1596,13 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
   const zoneResult = parseExclusionZonesInput(req.body);
   if (zoneResult.error) return res.status(400).json({ detail: zoneResult.error });
 
-  const existing = await db.collection("templates").findOne({ model_id, case_type_slug });
+  const existing = isDefault
+    ? await db.collection("templates").findOne({ is_default: true })
+    : await db.collection("templates").findOne({
+        model_id,
+        case_type_slug,
+        is_default: { $ne: true },
+      });
   const ts = nowIso();
   const zoneFields = {
     print_area: printAreaResult.print_area,
@@ -1576,7 +1621,10 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
     const archived = [...(existing.archived_paths || [])];
     if (req.file && existing.file_path) archived.push(existing.file_path);
     const update = {
-      brand_id,
+      brand_id: isDefault ? null : brand_id,
+      model_id: isDefault ? null : model_id,
+      case_type_slug: isDefault ? DEFAULT_TEMPLATE_SLUG : case_type_slug,
+      is_default: isDefault,
       file_path: filePath,
       canvas_width: dims.canvas_width,
       canvas_height: dims.canvas_height,
@@ -1595,9 +1643,10 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
   const filePath = `uploads/templates/${req.file.filename}`;
   const item = {
     id: crypto.randomUUID(),
-    model_id,
-    brand_id,
-    case_type_slug,
+    model_id: isDefault ? null : model_id,
+    brand_id: isDefault ? null : brand_id,
+    case_type_slug: isDefault ? DEFAULT_TEMPLATE_SLUG : case_type_slug,
+    is_default: isDefault,
     file_path: filePath,
     canvas_width: dims.canvas_width,
     canvas_height: dims.canvas_height,
@@ -1615,6 +1664,9 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
 api.post("/admin/templates/:template_id/clone", getCurrentAdmin, async (req, res) => {
   const source = await db.collection("templates").findOne({ id: req.params.template_id });
   if (!source) return res.status(404).json({ detail: "Template not found" });
+  if (source.is_default) {
+    return res.status(400).json({ detail: "Default templates apply to all models. Upload a model-specific overlay instead of cloning." });
+  }
   const { target_model_id, target_brand_id } = req.body || {};
   if (!target_model_id || !target_brand_id) {
     return res.status(400).json({ detail: "target_model_id and target_brand_id required" });
@@ -1656,6 +1708,7 @@ api.post("/admin/templates/:template_id/clone", getCurrentAdmin, async (req, res
     version: 1,
     archived_paths: [],
     enabled: true,
+    is_default: false,
     created_at: ts,
     updated_at: ts,
   };
@@ -2595,13 +2648,11 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
         try {
           const product = await db.collection("products").findOne({ id: item.product_id });
           const caseTypeSlug = product?.slug;
-          const template = caseTypeSlug
-            ? await db.collection("templates").findOne({
-                model_id: item.model_id,
-                case_type_slug: caseTypeSlug,
-                enabled: true,
-              })
-            : null;
+          const template = await resolvePrintTemplate({
+            template_id: item.template_id,
+            model_id: item.model_id,
+            case_type_slug: caseTypeSlug,
+          });
 
           if (template) {
             const printName = `${crypto.randomUUID().replace(/-/g, "")}.png`;
@@ -2630,13 +2681,11 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     try {
       const product = await db.collection("products").findOne({ id: order.product_id });
       const caseTypeSlug = product?.slug;
-      const template = caseTypeSlug
-        ? await db.collection("templates").findOne({
-            model_id: order.model_id,
-            case_type_slug: caseTypeSlug,
-            enabled: true,
-          })
-        : null;
+      const template = await resolvePrintTemplate({
+        template_id: order.template_id,
+        model_id: order.model_id,
+        case_type_slug: caseTypeSlug,
+      });
 
       if (template) {
         const printName = `${crypto.randomUUID().replace(/-/g, "")}.png`;
@@ -3357,13 +3406,28 @@ api.get("/", (req, res) => {
 
 app.use("/api", api);
 
+async function ensureGoogleIdIndex(users) {
+  const options = {
+    unique: true,
+    partialFilterExpression: { google_id: { $type: "string" } },
+  };
+  const existing = (await users.indexes()).find((idx) => idx.name === "google_id_1");
+  const matches =
+    existing &&
+    existing.unique === true &&
+    !existing.sparse &&
+    existing.partialFilterExpression?.google_id?.$type === "string";
+  if (existing && !matches) {
+    await users.dropIndex("google_id_1");
+    console.log("Replaced users.google_id_1 index (sparse unique → partial unique)");
+  }
+  await users.createIndex({ google_id: 1 }, options);
+}
+
 async function seed() {
   await ensureSecurityIndexes(db);
   await db.collection("users").createIndex("email", { unique: true });
-  await db.collection("users").createIndex(
-    { google_id: 1 },
-    { unique: true, partialFilterExpression: { google_id: { $type: "string" } } }
-  );
+  await ensureGoogleIdIndex(db.collection("users"));
   await db.collection("brands").createIndex("id", { unique: true });
   await db.collection("models").createIndex("id", { unique: true });
   await db.collection("products").createIndex("id", { unique: true });
@@ -3379,6 +3443,10 @@ async function seed() {
   await db.collection("razorpay_webhook_events").createIndex("id", { unique: true });
   await db.collection("templates").createIndex("id", { unique: true });
   await db.collection("templates").createIndex({ model_id: 1, case_type_slug: 1 });
+  await db.collection("templates").createIndex(
+    { is_default: 1 },
+    { unique: true, partialFilterExpression: { is_default: true }, name: "templates_default_unique" }
+  );
   await db.collection("promo_codes").createIndex("id", { unique: true });
   await db.collection("promo_codes").createIndex("code", { unique: true });
   await db.collection("template_products").createIndex("id", { unique: true });

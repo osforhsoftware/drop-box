@@ -6,6 +6,8 @@ const {
   normalizePrintArea,
   normalizeExclusionZones,
   printAreaCornerRadius,
+  normalizeCornerRadii,
+  roundedRectPathD,
 } = require("./cameraZone");
 
 const PRINT_DPI = 300;
@@ -97,24 +99,6 @@ async function renderDesignLayer(designPath, transform, outW, outH, screenW, scr
     .toBuffer();
 }
 
-function roundedRectPath(x, y, w, h, r) {
-  const rad = Math.min(Math.max(0, r), w / 2, h / 2);
-  const x2 = x + w;
-  const y2 = y + h;
-  return [
-    `M ${x + rad} ${y}`,
-    `L ${x2 - rad} ${y}`,
-    `Q ${x2} ${y} ${x2} ${y + rad}`,
-    `L ${x2} ${y2 - rad}`,
-    `Q ${x2} ${y2} ${x2 - rad} ${y2}`,
-    `L ${x + rad} ${y2}`,
-    `Q ${x} ${y2} ${x} ${y2 - rad}`,
-    `L ${x} ${y + rad}`,
-    `Q ${x} ${y} ${x + rad} ${y}`,
-    "Z",
-  ].join(" ");
-}
-
 function circlePath(cx, cy, r) {
   return [
     `M ${cx - r} ${cy}`,
@@ -135,7 +119,18 @@ function buildPrintAlphaMaskSvg(outW, outH, printArea, zones, scale) {
   const y = Math.round(pa.y * scale);
   const w = Math.round(pa.width * scale);
   const h = Math.round(pa.height * scale);
-  const corner = Math.round(printAreaCornerRadius(pa.width, pa.height, pa.rx ?? pa.ry) * scale);
+  const corners = normalizeCornerRadii(
+    pa,
+    pa.width,
+    pa.height,
+    printAreaCornerRadius(pa.width, pa.height, pa.rx ?? pa.ry)
+  );
+  const scaledCorners = {
+    rtl: Math.round(corners.rtl * scale),
+    rtr: Math.round(corners.rtr * scale),
+    rbr: Math.round(corners.rbr * scale),
+    rbl: Math.round(corners.rbl * scale),
+  };
 
   let holes = "";
   for (const zone of zones || []) {
@@ -146,12 +141,22 @@ function buildPrintAlphaMaskSvg(outW, outH, printArea, zones, scale) {
       const zy = Math.round(zone.y * scale);
       const zw = Math.round(zone.width * scale);
       const zh = Math.round(zone.height * scale);
-      const zr = Math.round((zone.rx ?? zone.ry ?? Math.min(zone.width, zone.height) * 0.22) * scale);
-      holes += ` ${roundedRectPath(zx, zy, zw, zh, zr)}`;
+      const zc = normalizeCornerRadii(
+        zone,
+        zone.width,
+        zone.height,
+        zone.rx ?? zone.ry ?? Math.min(zone.width, zone.height) * 0.22
+      );
+      holes += ` ${roundedRectPathD(zx, zy, zw, zh, {
+        rtl: Math.round(zc.rtl * scale),
+        rtr: Math.round(zc.rtr * scale),
+        rbr: Math.round(zc.rbr * scale),
+        rbl: Math.round(zc.rbl * scale),
+      })}`;
     }
   }
 
-  const d = `${roundedRectPath(x, y, w, h, corner)}${holes}`;
+  const d = `${roundedRectPathD(x, y, w, h, scaledCorners)}${holes}`;
   return Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}">` +
       `<rect width="100%" height="100%" fill="black"/>` +

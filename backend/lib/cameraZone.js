@@ -18,7 +18,8 @@ function normalizeRectExclusion(raw, defaults = {}) {
     return null;
   }
   const rxRaw = raw.rx != null ? Number(raw.rx) : raw.ry != null ? Number(raw.ry) : null;
-  const rx = rxRaw != null && !Number.isNaN(rxRaw) ? Math.max(0, rxRaw) : defaultCornerRadius(width, height);
+  const fallback = rxRaw != null && !Number.isNaN(rxRaw) ? Math.max(0, rxRaw) : defaultCornerRadius(width, height);
+  const corners = normalizeCornerRadii(raw, width, height, fallback);
   const type =
     raw.kind ||
     (raw.type && raw.type !== "rect" ? raw.type : null) ||
@@ -35,8 +36,7 @@ function normalizeRectExclusion(raw, defaults = {}) {
     y: Number(raw.y) || 0,
     width,
     height,
-    rx,
-    ry: rx,
+    ...corners,
   };
 }
 
@@ -100,20 +100,81 @@ function printAreaCornerRadius(width, height, preferred) {
   return Math.min(56, Math.max(24, Math.round(Math.min(width, height) * 0.06)));
 }
 
+function clampCornerRadius(value, width, height) {
+  return Math.max(0, Math.min(Number(value) || 0, width / 2, height / 2));
+}
+
+function fitCornerRadii(width, height, radii = {}) {
+  let rtl = Math.max(0, Number(radii.rtl) || 0);
+  let rtr = Math.max(0, Number(radii.rtr) || 0);
+  let rbr = Math.max(0, Number(radii.rbr) || 0);
+  let rbl = Math.max(0, Number(radii.rbl) || 0);
+  const factor = Math.min(
+    1,
+    width / Math.max(rtl + rtr, 1e-6),
+    width / Math.max(rbl + rbr, 1e-6),
+    height / Math.max(rtl + rbl, 1e-6),
+    height / Math.max(rtr + rbr, 1e-6)
+  );
+  return {
+    rtl: +(rtl * factor).toFixed(2),
+    rtr: +(rtr * factor).toFixed(2),
+    rbr: +(rbr * factor).toFixed(2),
+    rbl: +(rbl * factor).toFixed(2),
+  };
+}
+
+function normalizeCornerRadii(raw, width, height, uniformFallback = 0) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const uniform = clampCornerRadius(src.rx ?? src.ry ?? uniformFallback, width, height);
+  const pick = (key) => clampCornerRadius(src[key] != null ? src[key] : uniform, width, height);
+  const fitted = fitCornerRadii(width, height, {
+    rtl: pick("rtl"),
+    rtr: pick("rtr"),
+    rbr: pick("rbr"),
+    rbl: pick("rbl"),
+  });
+  return {
+    ...fitted,
+    rx: fitted.rtl,
+    ry: fitted.rtr,
+  };
+}
+
+function roundedRectPathD(x, y, w, h, r) {
+  const corners =
+    r && typeof r === "object"
+      ? fitCornerRadii(w, h, r)
+      : fitCornerRadii(w, h, { rtl: r, rtr: r, rbr: r, rbl: r });
+  const x2 = x + w;
+  const y2 = y + h;
+  return [
+    `M ${x + corners.rtl} ${y}`,
+    `L ${x2 - corners.rtr} ${y}`,
+    `Q ${x2} ${y} ${x2} ${y + corners.rtr}`,
+    `L ${x2} ${y2 - corners.rbr}`,
+    `Q ${x2} ${y2} ${x2 - corners.rbr} ${y2}`,
+    `L ${x + corners.rbl} ${y2}`,
+    `Q ${x} ${y2} ${x} ${y2 - corners.rbl}`,
+    `L ${x} ${y + corners.rtl}`,
+    `Q ${x} ${y} ${x + corners.rtl} ${y}`,
+    "Z",
+  ].join(" ");
+}
+
 function normalizePrintArea(template, canvasW = 0, canvasH = 0) {
   const raw = template?.print_area || template?.printArea;
   if (raw && typeof raw === "object") {
     const w = zoneDim(raw, "width", "w");
     const h = zoneDim(raw, "height", "h");
     if (w > 0 && h > 0) {
-      const rx = printAreaCornerRadius(w, h, raw.rx ?? raw.ry);
+      const corners = normalizeCornerRadii(raw, w, h, printAreaCornerRadius(w, h, raw.rx ?? raw.ry));
       return {
         x: Number(raw.x) || 0,
         y: Number(raw.y) || 0,
         width: w,
         height: h,
-        rx,
-        ry: rx,
+        ...corners,
       };
     }
     console.warn("[cameraZone] print_area has invalid width/height", raw);
@@ -122,7 +183,7 @@ function normalizePrintArea(template, canvasW = 0, canvasH = 0) {
   const ch = Number(template?.canvas_height) || canvasH || 0;
   if (cw > 0 && ch > 0) {
     const rx = printAreaCornerRadius(cw, ch);
-    return { x: 0, y: 0, width: cw, height: ch, rx, ry: rx };
+    return { x: 0, y: 0, width: cw, height: ch, ...normalizeCornerRadii({ rx }, cw, ch, rx) };
   }
   return null;
 }
@@ -182,15 +243,14 @@ function parsePrintAreaInput(body, canvasW, canvasH) {
   const w = zoneDim(raw, "width", "w");
   const h = zoneDim(raw, "height", "h");
   if (!w || !h) return { error: "Invalid print_area dimensions" };
-  const rx = printAreaCornerRadius(w, h, raw.rx ?? raw.ry);
+  const corners = normalizeCornerRadii(raw, w, h, printAreaCornerRadius(w, h, raw.rx ?? raw.ry));
   return {
     print_area: {
       x: Number(raw.x) || 0,
       y: Number(raw.y) || 0,
       width: w,
       height: h,
-      rx,
-      ry: rx,
+      ...corners,
     },
   };
 }
@@ -266,6 +326,8 @@ function enrichTemplate(template) {
 module.exports = {
   defaultCornerRadius,
   printAreaCornerRadius,
+  normalizeCornerRadii,
+  roundedRectPathD,
   normalizeCameraZone,
   normalizeMaskZones,
   normalizeExclusionZones,
