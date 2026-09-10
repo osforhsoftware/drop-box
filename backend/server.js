@@ -109,6 +109,20 @@ const {
   getRazorpayKeyId,
   amountToPaise,
 } = require("./lib/razorpayPayments");
+const { buildAdminOrderPatch } = require("./lib/adminOrderUpdate");
+const {
+  parseAdminOrderFilters,
+  customerOrdersQuery,
+  decorateAdminOrder,
+  failedPaymentClause,
+  pendingPaymentClause,
+  MAX_EXPORT_ROWS,
+} = require("./lib/adminOrderQuery");
+const {
+  EXPORT_FORMATS,
+  EXPORT_SCOPES,
+  buildExportFile,
+} = require("./lib/adminOrderExport");
 const {
   OAUTH_COOKIE,
   LOGIN_CODE_TTL_MS,
@@ -126,11 +140,17 @@ const {
   frontendLoginUrl,
 } = require("./lib/googleAuth");
 const { findOrCreateGoogleCustomer } = require("./lib/googleCustomer");
+const {
+  parseFit,
+  parseHeroFormFields,
+  toPublicHeroSlide,
+  seedDefaultHeroSlides,
+} = require("./lib/heroSlides");
 
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
 
-for (const sub of ["designs", "payments", "templates", "prints", "popups", "brands", "models", "products", "template-products", "customer-gallery"]) {
+for (const sub of ["designs", "payments", "templates", "prints", "popups", "brands", "models", "products", "template-products", "customer-gallery", "hero"]) {
   fs.mkdirSync(path.join(UPLOAD_DIR, sub), { recursive: true });
 }
 ensureGalleryDirs(UPLOAD_DIR);
@@ -148,6 +168,7 @@ let client;
 
 const DEFAULT_BRANDS = [
   { name: "Apple", models: ["iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro", "iPhone 14", "iPhone 13"] },
+  { name: "Akkukkaa", models: ["Akkukkaa", "Akkukkaa Pro"] },
   { name: "Samsung", models: ["Galaxy S24 Ultra", "Galaxy S24", "Galaxy S23 Ultra", "Galaxy A54", "Galaxy Note 20"] },
   { name: "Xiaomi", models: ["Xiaomi 14", "Redmi Note 13 Pro", "Poco F5", "Redmi 12"] },
   { name: "Vivo", models: ["Vivo V30 Pro", "Vivo X100", "Vivo Y100"] },
@@ -585,6 +606,27 @@ function optionalPopupUpload(req, res, next) {
   next();
 }
 
+function optionalHeroUpload(req, res, next) {
+  const ct = req.headers["content-type"] || "";
+  if (ct.includes("multipart/form-data")) {
+    return handleUpload("hero")(req, res, next);
+  }
+  next();
+}
+
+function deleteHeroImageFile(imageUrl) {
+  deleteCatalogImageFile(imageUrl, "hero");
+}
+
+async function nextHeroSlideOrder() {
+  const last = await db.collection("hero_slides")
+    .find({}, { projection: { order: 1 } })
+    .sort({ order: -1 })
+    .limit(1)
+    .toArray();
+  return (Number(last[0]?.order) || 0) + 1;
+}
+
 function createCatalogUpload(subdir, maxBytes) {
   return multer({
     storage,
@@ -781,6 +823,7 @@ app.use(
   cors({
     origin: corsOrigins || true,
     credentials: true,
+    exposedHeaders: ["Content-Disposition", "X-Export-Count"],
   })
 );
 app.use(
@@ -867,7 +910,7 @@ api.post("/auth/login", botProtection, async (req, res) => {
   }
 
   const user = await db.collection("users").findOne({ email: emailNorm });
-  const valid = user && verifyPassword(password, user.password_hash);
+  const valid = user && user.role === "admin" && verifyPassword(password, user.password_hash);
   if (!valid) {
     const failure = await recordLoginFailure(db, emailNorm, ip);
     await authDelay(failure.delayMs);
@@ -2006,6 +2049,113 @@ api.delete("/admin/popup-offers/:id", getCurrentAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Homepage hero slides ---
+api.get("/hero-slides", async (_req, res) => {
+  const items = await db.collection("hero_slides")
+    .find({ enabled: true }, { projection: { _id: 0 } })
+    .sort({ order: 1, created_at: 1 })
+    .limit(20)
+    .toArray();
+  res.json({
+    slides: items.map((item) => withRelativeMedia(toPublicHeroSlide(item), ["image_url"])),
+  });
+});
+
+api.get("/admin/hero-slides", getCurrentAdmin, async (_req, res) => {
+  const items = await db.collection("hero_slides")
+    .find({}, { projection: { _id: 0 } })
+    .sort({ order: 1, created_at: 1 })
+    .limit(50)
+    .toArray();
+  res.json(items.map((item) => withRelativeMedia(item, ["image_url"])));
+});
+
+api.post("/admin/hero-slides", getCurrentAdmin, handleUpload("hero"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ detail: "Image file is required" });
+  const parsed = parseHeroFormFields(req.body);
+  if (!parsed.title) return res.status(400).json({ detail: "Title is required" });
+
+  const ts = nowIso();
+  const item = {
+    id: crypto.randomUUID(),
+    title: parsed.title,
+    alt: parsed.alt,
+    image_url: publicUrl(`uploads/hero/${req.file.filename}`),
+    fit: parsed.fit,
+    enabled: parsed.enabled,
+    order: await nextHeroSlideOrder(),
+    created_at: ts,
+    updated_at: ts,
+  };
+  await db.collection("hero_slides").insertOne(item);
+  res.json(withRelativeMedia(item, ["image_url"]));
+});
+
+api.patch("/admin/hero-slides/:id", getCurrentAdmin, optionalHeroUpload, async (req, res) => {
+  const existing = await db.collection("hero_slides").findOne({ id: req.params.id });
+  if (!existing) return res.status(404).json({ detail: "Hero slide not found" });
+
+  const update = { updated_at: nowIso() };
+  if (req.body.title != null) {
+    const title = String(req.body.title).trim();
+    if (!title) return res.status(400).json({ detail: "Title is required" });
+    update.title = title;
+  }
+  if (req.body.alt !== undefined) {
+    update.alt = String(req.body.alt || update.title || existing.title).trim();
+  }
+  if (req.body.enabled !== undefined) update.enabled = parseBoolField(req.body.enabled);
+  if (req.body.fit !== undefined) update.fit = parseFit(req.body.fit);
+  if (req.body.order !== undefined) {
+    const order = Number(req.body.order);
+    if (!Number.isFinite(order) || order < 0) {
+      return res.status(400).json({ detail: "order must be a positive number" });
+    }
+    update.order = order;
+  }
+  if (req.file) {
+    deleteHeroImageFile(existing.image_url);
+    update.image_url = publicUrl(`uploads/hero/${req.file.filename}`);
+  }
+  if (Object.keys(update).length === 1) {
+    return res.status(400).json({ detail: "No fields to update" });
+  }
+
+  await db.collection("hero_slides").updateOne({ id: req.params.id }, { $set: update });
+  const saved = await db.collection("hero_slides").findOne({ id: req.params.id }, { projection: { _id: 0 } });
+  res.json(withRelativeMedia(saved, ["image_url"]));
+});
+
+api.post("/admin/hero-slides/:id/move", getCurrentAdmin, async (req, res) => {
+  const direction = String(req.body?.direction || "").toLowerCase();
+  if (direction !== "up" && direction !== "down") {
+    return res.status(400).json({ detail: "direction must be up or down" });
+  }
+  const items = await db.collection("hero_slides")
+    .find({}, { projection: { _id: 0, id: 1, order: 1 } })
+    .sort({ order: 1, created_at: 1 })
+    .toArray();
+  const index = items.findIndex((item) => item.id === req.params.id);
+  if (index < 0) return res.status(404).json({ detail: "Hero slide not found" });
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= items.length) {
+    return res.json({ ok: true });
+  }
+  const current = items[index];
+  const neighbor = items[swapWith];
+  await db.collection("hero_slides").updateOne({ id: current.id }, { $set: { order: neighbor.order, updated_at: nowIso() } });
+  await db.collection("hero_slides").updateOne({ id: neighbor.id }, { $set: { order: current.order, updated_at: nowIso() } });
+  res.json({ ok: true });
+});
+
+api.delete("/admin/hero-slides/:id", getCurrentAdmin, async (req, res) => {
+  const slide = await db.collection("hero_slides").findOne({ id: req.params.id });
+  if (!slide) return res.status(404).json({ detail: "Hero slide not found" });
+  deleteHeroImageFile(slide.image_url);
+  await db.collection("hero_slides").deleteOne({ id: req.params.id });
+  res.json({ ok: true });
+});
+
 // --- Template Products (marketplace pre-designed cases) ---
 // Public routes use /shop/templates to avoid conflicting with mockup /templates overlay API.
 
@@ -2635,6 +2785,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     razorpay_method: null,
     razorpay_amount_paise: null,
     payment_verified_at: null,
+    tracking_number: null,
     print_url: null,
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -2735,11 +2886,11 @@ api.get("/orders/mine", getCurrentUser, async (req, res) => {
   }
   const items = await db
     .collection("orders")
-    .find({ user_id: req.user.id }, { projection: { _id: 0 } })
+    .find(customerOrdersQuery(req.user.id), { projection: { _id: 0, razorpay_signature: 0 } })
     .sort({ created_at: -1 })
     .limit(100)
     .toArray();
-  res.json(items);
+  res.json(items.map((o) => stripOrderSecrets(o)));
 });
 
 api.get("/orders/:order_id", async (req, res) => {
@@ -2749,7 +2900,7 @@ api.get("/orders/:order_id", async (req, res) => {
   const o = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
   if (!o) return res.status(404).json({ detail: "Order not found" });
   // Never expose HMAC signature to clients
-  res.json(stripOrderSecrets(o));
+  res.json(decorateAdminOrder(o, stripOrderSecrets));
 });
 
 api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => {
@@ -2812,6 +2963,16 @@ api.post("/orders/:order_id/razorpay-order", getCurrentUser, async (req, res) =>
 
   if (order.payment_status === "approved") {
     return res.status(400).json({ detail: "Order is already paid" });
+  }
+
+  if (order.razorpay_order_id) {
+    return res.json({
+      razorpay_order_id: order.razorpay_order_id,
+      amount: amountToPaise(order.amount),
+      currency: order.currency || "INR",
+      key_id: getRazorpayKeyId(),
+      order_id: order.order_id,
+    });
   }
 
   try {
@@ -2935,6 +3096,59 @@ api.post("/orders/:order_id/verify-payment", verifyPaymentRateLimiter, getCurren
   });
 });
 
+api.post("/orders/:order_id/report-payment", getCurrentUser, async (req, res) => {
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
+  }
+
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  const accessErr = await assertOrderAccess(req, order);
+  if (accessErr) return res.status(accessErr.status).json({ detail: accessErr.detail });
+
+  if (order.payment_status === "approved") {
+    return res.json({
+      ok: true,
+      skipped: true,
+      order_id: order.order_id,
+      payment_status: "approved",
+    });
+  }
+
+  const outcome = String(req.body?.outcome || "").toLowerCase();
+  if (outcome !== "cancelled" && outcome !== "failed") {
+    return res.status(400).json({ detail: "outcome must be cancelled or failed" });
+  }
+
+  const defaultReason = outcome === "cancelled"
+    ? "Customer cancelled or closed checkout"
+    : "Payment failed";
+  const reason = clampString(req.body?.reason, 200) || defaultReason;
+  const failedAt = nowIso();
+
+  await db.collection("orders").updateOne(
+    { order_id: order.order_id, payment_status: { $ne: "approved" } },
+    {
+      $set: {
+        payment_status: "failed",
+        payment_failure_reason: reason,
+        payment_failed_at: failedAt,
+        updated_at: failedAt,
+      },
+    }
+  );
+
+  const fresh = await db.collection("orders").findOne(
+    { order_id: order.order_id },
+    { projection: { _id: 0 } }
+  );
+  res.json({
+    ok: true,
+    order_id: order.order_id,
+    payment_status: fresh?.payment_status || "failed",
+    payment_failure_reason: fresh?.payment_failure_reason || reason,
+  });
+});
+
 api.post("/webhooks/razorpay", async (req, res) => {
   const signature = req.headers["x-razorpay-signature"];
   if (!signature) {
@@ -3034,6 +3248,7 @@ api.post("/webhooks/razorpay", async (req, res) => {
           razorpay_payment_id: razorpayPaymentId || order.razorpay_payment_id,
           payment_status: "failed",
           payment_failure_reason: paymentEntity?.error_description || paymentEntity?.error_code || "payment_failed",
+          payment_failed_at: nowIso(),
           updated_at: nowIso(),
         },
       }
@@ -3052,28 +3267,108 @@ api.post("/webhooks/razorpay", async (req, res) => {
   res.json({ ok: true });
 });
 
+async function fetchAdminOrders(parsed, { skip, limit }) {
+  const query = parsed.mongoQuery;
+  const collection = db.collection("orders");
+  const scoped = (extra) => (Object.keys(query).length ? { $and: [query, extra] } : extra);
+  const confirmedQuery = scoped({ payment_status: "approved" });
+  const pendingQuery = scoped(pendingPaymentClause());
+  const failedQuery = scoped(failedPaymentClause());
+  const [total, confirmed, unpaid, failed, items] = await Promise.all([
+    collection.countDocuments(query),
+    collection.countDocuments(confirmedQuery),
+    collection.countDocuments(pendingQuery),
+    collection.countDocuments(failedQuery),
+    collection
+      .find(query, { projection: { _id: 0, razorpay_signature: 0 } })
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray(),
+  ]);
+  return {
+    items: items.map((o) => decorateAdminOrder(o, stripOrderSecrets)),
+    total,
+    confirmed,
+    unpaid,
+    failed,
+  };
+}
+
 api.get("/admin/orders", getCurrentAdmin, async (req, res) => {
-  const items = await db.collection("orders").find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(500).toArray();
-  res.json(items);
+  const parsed = parseAdminOrderFilters(req.query || {});
+  const result = await fetchAdminOrders(parsed, { skip: parsed.skip, limit: parsed.pageSize });
+  res.json({
+    items: result.items,
+    total: result.total,
+    confirmed: result.confirmed,
+    unpaid: result.unpaid,
+    failed: result.failed,
+    page: parsed.page,
+    pageSize: parsed.pageSize,
+    applied: parsed.applied,
+    filters: parsed.values,
+  });
+});
+
+api.post("/admin/orders/export", getCurrentAdmin, async (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const format = String(body.format || "csv").toLowerCase();
+  const scope = String(body.scope || "filtered").toLowerCase();
+  if (!EXPORT_FORMATS.includes(format)) {
+    return res.status(400).json({ detail: "Export format must be csv, xlsx, or pdf" });
+  }
+  if (!EXPORT_SCOPES.includes(scope)) {
+    return res.status(400).json({ detail: "Export scope must be view, filtered, or all" });
+  }
+
+  const parsed = parseAdminOrderFilters(scope === "all" ? {} : body);
+  let skip = 0;
+  let limit = MAX_EXPORT_ROWS;
+  if (scope === "view") {
+    skip = parsed.skip;
+    limit = parsed.pageSize;
+  }
+
+  const collection = db.collection("orders");
+  const items = await collection
+    .find(parsed.mongoQuery, { projection: { _id: 0, razorpay_signature: 0 } })
+    .sort({ created_at: -1 })
+    .skip(skip)
+    .limit(limit)
+    .toArray();
+
+  const file = buildExportFile(items, {
+    columns: body.columns,
+    format,
+    scope,
+  });
+  res.setHeader("Content-Type", file.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+  res.setHeader("X-Export-Count", String(file.count));
+  res.send(file.buffer);
 });
 
 api.patch("/admin/orders/:order_id", getCurrentAdmin, async (req, res) => {
-  const update = {};
-  if (req.body.payment_status != null) update.payment_status = req.body.payment_status;
-  if (req.body.delivery_status != null) update.delivery_status = req.body.delivery_status;
-  if (Object.keys(update).length === 0) {
-    return res.status(400).json({ detail: "No fields to update" });
+  if (!isValidOrderId(req.params.order_id)) {
+    return res.status(400).json({ detail: "Invalid order ID" });
   }
-  update.updated_at = nowIso();
-  await db.collection("orders").updateOne({ order_id: req.params.order_id }, { $set: update });
+  const order = await db.collection("orders").findOne({ order_id: req.params.order_id });
+  const patch = buildAdminOrderPatch(order, req.body);
+  if (patch.error) {
+    return res.status(patch.status || 400).json({ detail: patch.error });
+  }
+  patch.update.updated_at = nowIso();
+  await db.collection("orders").updateOne({ order_id: req.params.order_id }, { $set: patch.update });
   const o = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
-  res.json(o);
+  res.json(decorateAdminOrder(o, stripOrderSecrets));
 });
 
 api.get("/admin/analytics", getCurrentAdmin, async (req, res) => {
   const orders = db.collection("orders");
   const total = await orders.countDocuments({});
-  const pending = await orders.countDocuments({ payment_status: { $in: ["pending", "submitted"] } });
+  const pending = await orders.countDocuments(pendingPaymentClause());
+  const failed = await orders.countDocuments(failedPaymentClause());
   const approved = await orders.countDocuments({ payment_status: "approved" });
   const shipped = await orders.countDocuments({ delivery_status: "shipped" });
   const delivered = await orders.countDocuments({ delivery_status: "delivered" });
@@ -3091,6 +3386,7 @@ api.get("/admin/analytics", getCurrentAdmin, async (req, res) => {
   res.json({
     total_orders: total,
     pending,
+    failed,
     approved,
     shipped,
     delivered,
@@ -3438,6 +3734,10 @@ async function seed() {
   );
   await db.collection("orders").createIndex("order_id", { unique: true });
   await db.collection("orders").createIndex("user_id");
+  await db.collection("orders").createIndex({ created_at: -1 });
+  await db.collection("orders").createIndex({ payment_status: 1, created_at: -1 });
+  await db.collection("orders").createIndex({ delivery_status: 1, created_at: -1 });
+  await db.collection("orders").createIndex({ user_id: 1, payment_status: 1, created_at: -1 });
   await db.collection("orders").createIndex("razorpay_order_id");
   await db.collection("orders").createIndex("razorpay_payment_id");
   await db.collection("razorpay_webhook_events").createIndex("id", { unique: true });
@@ -3449,6 +3749,15 @@ async function seed() {
   );
   await db.collection("promo_codes").createIndex("id", { unique: true });
   await db.collection("promo_codes").createIndex("code", { unique: true });
+  await db.collection("hero_slides").createIndex("id", { unique: true });
+  await db.collection("hero_slides").createIndex({ enabled: 1, order: 1 });
+  const seededHero = await seedDefaultHeroSlides(db, {
+    uploadDir: UPLOAD_DIR,
+    frontendHeroDir: path.join(ROOT_DIR, "..", "frontend", "public", "images", "hero"),
+    publicUrl,
+    nowIso,
+  });
+  if (seededHero) console.log(`Seeded ${seededHero} homepage hero slides`);
   await db.collection("template_products").createIndex("id", { unique: true });
   await db.collection("template_products").createIndex("slug", { unique: true });
   await db.collection("template_products").createIndex({ status: 1, featured: 1 });

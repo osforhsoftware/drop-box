@@ -6,6 +6,13 @@
  */
 export { TemplateRenderer } from "./TemplateRenderer";
 export { loadTemplate, normalizeLoadedTemplate, listPrintSurfaces } from "./TemplateLoader";
+export {
+  DEMO_PHONE_CASE_OVERLAY,
+  DEMO_TEMPLATE_CANVAS,
+  DEMO_PRINT_AREA,
+  DEMO_CAMERA_ZONE,
+  buildDemoLoadedTemplate,
+} from "./demoTemplate";
 export { CanvasViewport } from "./CanvasViewport";
 export { ClipPathFactory } from "./ClipPathFactory";
 export { ArtworkLayer } from "./ArtworkLayer";

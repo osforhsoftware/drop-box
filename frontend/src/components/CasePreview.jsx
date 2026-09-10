@@ -1,4 +1,6 @@
-// Realistic phone case preview component — pure CSS+SVG (no fabric.js needed for preview chip)
+import { DEMO_PHONE_CASE_OVERLAY } from "../lib/caseTemplate/demoTemplate";
+
+// Realistic phone case preview — design + shared demo case overlay frame
 export default function CasePreview({ imageUrl, model, productSlug = "silicone" }) {
   const tint =
     productSlug === "transparent"
@@ -18,13 +20,20 @@ export default function CasePreview({ imageUrl, model, productSlug = "silicone" 
         <img
           src={imageUrl}
           alt="design"
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-[8%] w-[84%] h-[84%] object-cover rounded-[28px]"
         />
       ) : (
         <div className="absolute inset-0 grid place-items-center text-xs text-white/40">
           Your design here
         </div>
       )}
+      <img
+        src={DEMO_PHONE_CASE_OVERLAY}
+        alt=""
+        aria-hidden
+        className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+        draggable={false}
+      />
       {/* glare */}
       <div className="absolute inset-0 pointer-events-none bg-gradient-to-tr from-white/0 via-white/[0.06] to-white/0" />
       {model && (

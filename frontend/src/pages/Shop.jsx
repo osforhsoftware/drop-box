@@ -21,6 +21,7 @@ export default function Shop() {
   const { addToCart } = useCart();
   const [filters, setFilters] = useState(() => ({
     ...DEFAULT_FILTERS,
+    search: searchParams.get("search") || "",
     collection: searchParams.get("collection") || "",
     product_type: searchParams.get("product_type") || "",
     case_type: searchParams.get("case_type") || "",
@@ -40,12 +41,14 @@ export default function Shop() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
+    const search = searchParams.get("search") || "";
     const collection = searchParams.get("collection") || "";
     const product_type = searchParams.get("product_type") || "";
     const case_type = searchParams.get("case_type") || "";
     setFilters((prev) => {
       const sort = searchParams.get("sort") || prev.sort || "newest";
       if (
+        prev.search === search &&
         prev.collection === collection &&
         prev.product_type === product_type &&
         prev.case_type === case_type &&
@@ -53,7 +56,7 @@ export default function Shop() {
       ) {
         return prev;
       }
-      return { ...prev, collection, product_type, case_type, sort };
+      return { ...prev, search, collection, product_type, case_type, sort };
     });
   }, [searchParams]);
 
@@ -163,16 +166,16 @@ export default function Shop() {
     [navigate, user]
   );
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12" data-testid="shop-page">
-      <div className="mb-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-9 sm:py-12" data-testid="shop-page">
+      <div className="mb-8 sm:mb-10">
         <div className="label-eyebrow">Template Marketplace</div>
-        <h1 className="font-display text-4xl lg:text-5xl mt-3">Shop Phone Cases</h1>
+        <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl mt-3">Shop Phone Cases</h1>
         <p className="text-white/50 mt-2 max-w-xl text-sm">
           Browse all phone cases — customized designs and original covers in one place.
         </p>
       </div>
 
-      <div className="flex gap-8">
+      <div className="flex gap-6 lg:gap-8">
         <TemplateFilters
           filters={filters}
           onChange={setFilters}
@@ -183,7 +186,7 @@ export default function Shop() {
         />
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-6 gap-4">
+          <div className="flex items-center justify-between mb-5 sm:mb-6 gap-4">
             <p className="text-sm text-white/50">
               {loading ? "Loading…" : `${total} template${total !== 1 ? "s" : ""}`}
             </p>
@@ -198,7 +201,7 @@ export default function Shop() {
 
           {loading && !items.length ? (
             <div className={SHOP_PRODUCT_GRID}>
-              {Array.from({ length: 6 }).map((_, i) => (
+              {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="aspect-[5/4] bg-white/5 rounded-2xl animate-pulse" />
               ))}
             </div>

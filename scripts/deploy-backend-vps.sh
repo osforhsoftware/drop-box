@@ -53,12 +53,18 @@ if [ -f "$ENV_PRESERVE" ]; then
   cp -a "$ENV_PRESERVE" "$APP_DIR/.env"
 fi
 
-# Production public settings (frontend is hosted elsewhere)
+# Production public settings only — never overwrite ADMIN_EMAIL / ADMIN_PASSWORD
+# (keep the existing VPS admin user).
 upsert_env "$APP_DIR/.env" "NODE_ENV" "production"
 upsert_env "$APP_DIR/.env" "HOST" "0.0.0.0"
 upsert_env "$APP_DIR/.env" "PORT" "8000"
 upsert_env "$APP_DIR/.env" "PUBLIC_BASE_URL" "https://145-223-23-47.sslip.io"
 upsert_env "$APP_DIR/.env" "CORS_ORIGINS" "https://caseboxstore.com,https://www.caseboxstore.com"
+upsert_env "$APP_DIR/.env" "FRONTEND_URL" "https://caseboxstore.com"
+upsert_env "$APP_DIR/.env" "GOOGLE_CALLBACK_URL" "https://145-223-23-47.sslip.io/api/auth/google/callback"
+
+# Hero / catalog uploads live on disk (not in git)
+mkdir -p "$APP_DIR/uploads/hero" "$APP_DIR/uploads/designs" "$APP_DIR/uploads/templates" "$APP_DIR/uploads/template-products" "$APP_DIR/uploads/models" "$APP_DIR/uploads/brands" "$APP_DIR/uploads/popups"
 
 cd "$APP_DIR"
 npm install --omit=dev

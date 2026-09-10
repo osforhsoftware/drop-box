@@ -4,26 +4,36 @@ import {
   normalizePrintArea,
   normalizeExclusionZones,
 } from "../cameraZone";
+import { buildDemoLoadedTemplate } from "./demoTemplate";
 
 /**
  * Load and normalize a case overlay template for a model + case type.
  * Always works in template pixel coordinates (never screen pixels).
+ * Falls back to an admin default overlay (all models), then a built-in demo.
  */
-export async function loadTemplate({ modelId, caseTypeSlug }) {
+export async function loadTemplate({ modelId, caseTypeSlug, allowDemo = true } = {}) {
   if (!modelId || !caseTypeSlug) {
-    return { template: null, printArea: null, exclusionZones: [], overlayUrl: null };
+    return allowDemo
+      ? buildDemoLoadedTemplate({ modelId, caseTypeSlug })
+      : { template: null, printArea: null, exclusionZones: [], overlayUrl: null };
   }
 
   try {
     const { data } = await api.get("/templates", {
       params: { model_id: modelId, case_type_slug: caseTypeSlug },
     });
-    return normalizeLoadedTemplate(data);
+    const loaded = normalizeLoadedTemplate(data);
+    if (loaded.template && loaded.overlayUrl) return loaded;
+    return allowDemo
+      ? buildDemoLoadedTemplate({ modelId, caseTypeSlug })
+      : loaded;
   } catch (err) {
     if (err?.response?.status !== 404) {
       console.error("[TemplateLoader] failed to load template", err);
     }
-    return { template: null, printArea: null, exclusionZones: [], overlayUrl: null };
+    return allowDemo
+      ? buildDemoLoadedTemplate({ modelId, caseTypeSlug })
+      : { template: null, printArea: null, exclusionZones: [], overlayUrl: null };
   }
 }
 
@@ -46,6 +56,7 @@ export function normalizeLoadedTemplate(raw) {
       print_area: printArea,
       exclusion_zones: exclusionZones,
       mask_zones: exclusionZones,
+      is_default: Boolean(raw.is_default),
     },
     printArea,
     exclusionZones,

@@ -15,9 +15,21 @@ function normalizeBackendUrl(raw) {
   return `https://${url}`;
 }
 
-export const BACKEND_URL = normalizeBackendUrl(
-  import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_BACKEND_URL
-);
+function resolveRuntimeBackendUrl() {
+  const envUrl = normalizeBackendUrl(
+    import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_BACKEND_URL
+  );
+  if (typeof window === "undefined") return envUrl;
+  const host = window.location.hostname;
+  const isLoopback = host === "localhost" || host === "127.0.0.1";
+  // Phone / LAN: use this page's origin so /api is proxied by Vite.
+  if (!isLoopback && import.meta.env.DEV) {
+    return window.location.origin.replace(/\/$/, "");
+  }
+  return envUrl;
+}
+
+export const BACKEND_URL = resolveRuntimeBackendUrl();
 export const API_BASE = `${BACKEND_URL}/api`;
 
 export const api = axios.create({

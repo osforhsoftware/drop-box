@@ -40,6 +40,7 @@ export default function AdminCaseTypes() {
     return () => URL.revokeObjectURL(url);
   }, [file, editing]);
 
+  
   const resetFile = () => {
     setFile(null);
     if (fileRef.current) fileRef.current.value = "";

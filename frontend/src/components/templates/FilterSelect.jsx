@@ -8,9 +8,7 @@ import {
 
 const ALL = "__all__";
 
-/**
- * Dark-themed select matching the FORM glass UI (fixes native white dropdown on Windows).
- */
+/** Light storefront select with a portal-safe dropdown surface. */
 export default function FilterSelect({
   value,
   onChange,
@@ -31,18 +29,18 @@ export default function FilterSelect({
     <Select value={selectValue} onValueChange={handleChange} disabled={disabled}>
       <SelectTrigger
         data-testid={testId}
-        className="h-10 w-full rounded-xl border-white/10 bg-white/[0.04] text-sm text-white shadow-none focus:ring-1 focus:ring-brand data-[placeholder]:text-white/40 hover:bg-white/[0.06] transition-colors"
+        className="h-10 w-full rounded-xl border-neutral-200 bg-white text-sm text-neutral-900 shadow-none focus:ring-1 focus:ring-brand data-[placeholder]:text-neutral-400 hover:bg-neutral-50 transition-colors"
       >
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent
-        className="z-[60] rounded-xl border border-white/10 bg-[#121214]/95 text-white shadow-xl backdrop-blur-xl"
+        className="z-[60] rounded-xl border border-neutral-200 bg-white text-neutral-900 shadow-xl"
         position="popper"
       >
         {allowAll && (
           <SelectItem
             value={ALL}
-            className="rounded-lg text-white/80 focus:bg-brand/15 focus:text-white data-[highlighted]:bg-brand/15 data-[highlighted]:text-white"
+            className="rounded-lg text-neutral-700 focus:bg-brand/15 focus:text-neutral-950 data-[highlighted]:bg-brand/15 data-[highlighted]:text-neutral-950"
           >
             {allLabel}
           </SelectItem>
@@ -51,7 +49,7 @@ export default function FilterSelect({
           <SelectItem
             key={opt.value}
             value={opt.value}
-            className="rounded-lg text-white/80 focus:bg-brand/15 focus:text-white data-[highlighted]:bg-brand/15 data-[highlighted]:text-white"
+            className="rounded-lg text-neutral-700 focus:bg-brand/15 focus:text-neutral-950 data-[highlighted]:bg-brand/15 data-[highlighted]:text-neutral-950"
           >
             {opt.label}
           </SelectItem>

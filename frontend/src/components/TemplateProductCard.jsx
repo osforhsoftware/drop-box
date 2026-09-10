@@ -151,12 +151,12 @@ export default function TemplateProductCard({
           </span>
         )}
         {product.featured && (
-          <span className="absolute top-2 right-2 z-[2] px-1.5 py-0.5 rounded-md glass-2 text-[9px] font-mono uppercase tracking-wider text-brand">
+          <span className={`absolute ${hasDiscount ? "top-8" : "top-2"} left-2 z-[2] px-1.5 py-0.5 rounded-md glass-2 text-[9px] font-mono uppercase tracking-wider text-brand`}>
             Featured
           </span>
         )}
         {isOriginal && (
-          <span className="absolute bottom-2 left-2 z-[2] px-1.5 py-0.5 rounded-md glass-2 text-[9px] font-mono uppercase tracking-wider text-white/80">
+          <span className={`absolute ${hasDiscount && product.featured ? "top-14" : hasDiscount || product.featured ? "top-8" : "top-2"} left-2 z-[2] px-1.5 py-0.5 rounded-md glass-2 text-[9px] font-mono uppercase tracking-wider text-white/80`}>
             Original
           </span>
         )}
@@ -178,7 +178,7 @@ export default function TemplateProductCard({
       <Link
         to={`/template/${product.slug}`}
         className={`product-card-body flex-1 flex flex-col border-t border-white/[0.04] ${
-          mini ? "px-2 py-1.5" : compact ? "px-2.5 py-1.5" : "px-3 py-2"
+          mini ? "px-2 py-1.5" : compact ? "px-2.5 py-1.5" : "px-2.5 py-1.5 sm:px-3 sm:py-2"
         }`}
       >
         {mini ? (
@@ -218,48 +218,48 @@ export default function TemplateProductCard({
         ) : (
           <>
             {product.collection && (
-              <span className="text-[9px] font-mono uppercase tracking-widest text-brand/80">
+              <span className="text-[9px] sm:text-[10px] font-mono font-medium uppercase tracking-[0.12em] text-brand">
                 {product.collection}
               </span>
             )}
             <h3
-              className="font-medium text-sm leading-tight mt-0.5 line-clamp-1 transition-colors duration-300 group-hover:text-brand group-focus-within:text-brand"
+              className="font-semibold text-[13px] sm:text-[15px] leading-snug mt-0.5 sm:mt-1 line-clamp-1 transition-colors duration-300 group-hover:text-brand group-focus-within:text-brand"
               title={product.title}
             >
               {displayTemplateTitle(product.title)}
             </h3>
-            <div className="flex items-center justify-between gap-2 mt-1 text-[11px] text-white/45">
+            <div className="flex items-center justify-between gap-1 sm:gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs text-white/55">
               <span className="truncate min-w-0">
                 {product.phone_brand}
                 {product.phone_models?.[0] && (
-                  <span className="text-white/30"> · {product.phone_models[0]}</span>
+                  <span className="text-white/30 hidden min-[380px]:inline"> · {product.phone_models[0]}</span>
                 )}
               </span>
               <span className="flex items-center gap-0.5 shrink-0">
                 <Star className="w-2.5 h-2.5 fill-brand text-brand" />
                 <span>{product.rating?.toFixed(1) || "4.5"}</span>
-                <span className="text-white/30">({product.review_count || 0})</span>
+                <span className="text-white/30 hidden sm:inline">({product.review_count || 0})</span>
               </span>
             </div>
-            <div className="flex items-center justify-between mt-auto pt-1.5">
-              <div className="flex items-baseline gap-1.5">
-                <span className="font-medium text-sm">{formatPrice(price)}</span>
+            <div className="flex items-center justify-between mt-auto pt-1 sm:pt-1.5">
+              <div className="flex items-baseline gap-1 sm:gap-1.5">
+                <span className="font-semibold text-sm sm:text-base">{formatPrice(price)}</span>
                 {hasDiscount && (
-                  <span className="text-[11px] text-white/35 line-through">
+                  <span className="text-[10px] sm:text-xs text-white/45 line-through">
                     {formatPrice(product.price)}
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
                 {colorTags.length > 0 && (
                   <ColorSwatchGroup colors={colorTags} size="sm" />
                 )}
                 {product.best_seller && (
-                  <span className="flex items-center gap-0.5 text-[9px] text-emerald-400">
+                  <span className="hidden sm:flex items-center gap-0.5 text-[10px] font-medium text-emerald-600">
                     <Zap className="w-2.5 h-2.5" /> Best Seller
                   </span>
                 )}
-                <span className="text-[9px] font-mono text-white/35 uppercase">
+                <span className="text-[9px] sm:text-[10px] font-mono text-white/50 uppercase">
                   {caseTypeLabel(product.case_type)}
                 </span>
               </div>

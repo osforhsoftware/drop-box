@@ -1,5 +1,5 @@
 import * as fabric from "fabric";
-import { printAreaCornerRadius } from "../cameraZone";
+import { printAreaCornerRadius, normalizeCornerRadii, attachIndependentCorners } from "../cameraZone";
 
 /** Studio backdrop behind the case (yourPrint-style light stage). */
 export const STUDIO_BACKGROUND = "#ececee";
@@ -34,15 +34,20 @@ export class CaseColorLayer {
 
     this.printArea = area;
     this.color = color || DEFAULT_CASE_COLOR;
-    const rx = printAreaCornerRadius(area.width, area.height, area.rx ?? area.ry);
+    const corners = normalizeCornerRadii(
+      area,
+      area.width,
+      area.height,
+      printAreaCornerRadius(area.width, area.height, area.rx ?? area.ry)
+    );
 
     const rect = new fabric.Rect({
       left: area.x,
       top: area.y,
       width: area.width,
       height: area.height,
-      rx,
-      ry: rx,
+      rx: corners.rtl,
+      ry: corners.rtl,
       originX: "left",
       originY: "top",
       fill: this.color,
@@ -52,6 +57,7 @@ export class CaseColorLayer {
       hasBorders: false,
       objectCaching: false,
     });
+    attachIndependentCorners(rect, corners);
     rect.isCaseColor = true;
     canvas.add(rect);
     canvas.sendObjectToBack(rect);

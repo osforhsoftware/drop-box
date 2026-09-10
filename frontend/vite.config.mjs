@@ -1,36 +1,51 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, transformWithOxc } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
-const legacyJsxPlugin = {
-  name: "legacy-js-as-jsx",
-  enforce: "pre",
-  async transform(code, id) {
-    if (!/[\\/]src[\\/].*\.js$/.test(id)) return null;
-    return transformWithOxc(code, id, { lang: "jsx" });
-  },
-};
+function vendorChunk(id) {
+  if (!id.includes("node_modules")) return undefined;
+  if (id.includes("fabric")) return "vendor-fabric";
+  if (id.includes("framer-motion")) return "vendor-motion";
+  if (id.includes("swiper")) return "vendor-swiper";
+  if (id.includes("@radix-ui")) return "vendor-radix";
+  if (id.includes("lucide-react")) return "vendor-icons";
+  if (id.includes("react-dom") || id.includes("react-router") || /[/\\]react[/\\]/.test(id)) {
+    return "vendor-react";
+  }
+  if (id.includes("@tanstack")) return "vendor-query";
+  return "vendor";
+}
 
 export default defineConfig({
-  plugins: [legacyJsxPlugin, react({ include: /\.[jt]sx?$/ })],
-  optimizeDeps: {
-    rolldownOptions: {
-      moduleTypes: {
-        ".js": "jsx",
-      },
-    },
-  },
+  plugins: [react()],
   resolve: {
     alias: {
       "@": path.resolve(rootDir, "src"),
     },
   },
   envPrefix: ["VITE_", "REACT_APP_"],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: vendorChunk,
+      },
+    },
+  },
   server: {
-    host: "localhost",
+    host: true,
     port: 3000,
+    allowedHosts: true,
+    watch: {
+      ignored: ["**/dist.zip", "**/*.zip"],
+    },
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
   },
 });

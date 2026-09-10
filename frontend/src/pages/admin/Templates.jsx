@@ -69,7 +69,7 @@ function formatDate(iso) {
   });
 }
 
-function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
+export function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate, forceDefault = false }) {
   const locked = Boolean(replaceTemplate);
   const [brands, setBrands] = useState([]);
   const [models, setModels] = useState([]);
@@ -77,6 +77,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
   const [brandId, setBrandId] = useState("");
   const [modelId, setModelId] = useState("");
   const [caseType, setCaseType] = useState("");
+  const [isDefault, setIsDefault] = useState(false);
   const [file, setFile] = useState(null);
   const [existingVersion, setExistingVersion] = useState(null);
   const [maskZones, setMaskZones] = useState([]);
@@ -96,9 +97,10 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
     if (!open) return;
     api.get("/brands").then((r) => setBrands(r.data));
     if (replaceTemplate) {
-      setBrandId(replaceTemplate.brand_id);
-      setModelId(replaceTemplate.model_id);
-      setCaseType(replaceTemplate.case_type_slug);
+      setIsDefault(Boolean(replaceTemplate.is_default));
+      setBrandId(replaceTemplate.brand_id || "");
+      setModelId(replaceTemplate.model_id || "");
+      setCaseType(replaceTemplate.is_default ? "" : replaceTemplate.case_type_slug);
       setMaskZones(normalizeMaskZones(replaceTemplate));
       const existingPrint = normalizePrintArea(replaceTemplate);
       // Full-canvas print_area is the legacy fallback — treat as unset so admin redraws the phone body.
@@ -129,6 +131,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
           : null
       );
     } else {
+      setIsDefault(Boolean(forceDefault));
       setBrandId("");
       setModelId("");
       setCaseType("");
@@ -140,9 +143,14 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
       setFileWarnings([]);
       setFileMeta(null);
     }
-  }, [open, replaceTemplate]);
+  }, [open, replaceTemplate, forceDefault]);
 
   useEffect(() => {
+    if (isDefault) {
+      setModels([]);
+      setCaseTypes([]);
+      return;
+    }
     if (!brandId) {
       setModels([]);
       setCaseTypes([]);
@@ -151,9 +159,14 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
     api.get(`/models?brand_id=${brandId}`).then((modelResponse) => {
       setModels(modelResponse.data);
     });
-  }, [brandId, locked]);
+  }, [brandId, locked, isDefault]);
 
   useEffect(() => {
+    if (isDefault) {
+      setCaseTypes([]);
+      if (!locked) setCaseType("");
+      return;
+    }
     if (!modelId) {
       setCaseTypes([]);
       if (!locked) setCaseType("");
@@ -168,9 +181,19 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
           ));
         }
       });
-  }, [brandId, modelId, locked]);
+  }, [brandId, modelId, locked, isDefault]);
 
   useEffect(() => {
+    if (isDefault) {
+      api
+        .get("/admin/templates")
+        .then((r) => {
+          const found = (r.data || []).find((t) => t.is_default);
+          setExistingVersion(found ? found.version : null);
+        })
+        .catch(() => setExistingVersion(null));
+      return;
+    }
     if (!modelId || !caseType || locked) {
       if (!locked) setExistingVersion(null);
       return;
@@ -179,12 +202,12 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
       .get("/admin/templates")
       .then((r) => {
         const found = r.data.find(
-          (t) => t.model_id === modelId && t.case_type_slug === caseType
+          (t) => t.model_id === modelId && t.case_type_slug === caseType && !t.is_default
         );
         setExistingVersion(found ? found.version : null);
       })
       .catch(() => setExistingVersion(null));
-  }, [modelId, caseType, locked]);
+  }, [modelId, caseType, locked, isDefault]);
 
   const onDrop = useCallback(async (accepted) => {
     const f = accepted[0];
@@ -230,10 +253,9 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
     printArea &&
     printArea.width > 0 &&
     printArea.height > 0;
+  const targetOk = isDefault || (brandId && modelId && caseType);
   const canSubmit =
-    brandId &&
-    modelId &&
-    caseType &&
+    targetOk &&
     printAreaOk &&
     maskZones.length > 0 &&
     maskZones.every((z) => z.type === "rect" && z.width > 0 && z.height > 0) &&
@@ -243,7 +265,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
     !submitting &&
     !validatingFile;
 
-  const submitHint = !brandId || !modelId || !caseType
+  const submitHint = !targetOk
     ? "Select brand, model, and case type."
     : needsNewFile && !file
       ? "Upload a transparent frame PNG."
@@ -259,9 +281,13 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
     if (!canSubmit) return;
     setSubmitting(true);
     const form = new FormData();
-    form.append("model_id", modelId);
-    form.append("brand_id", brandId);
-    form.append("case_type_slug", caseType);
+    if (isDefault) {
+      form.append("is_default", "true");
+    } else {
+      form.append("model_id", modelId);
+      form.append("brand_id", brandId);
+      form.append("case_type_slug", caseType);
+    }
     form.append("canvas_width", String(canvasDims.canvas_width));
     form.append("canvas_height", String(canvasDims.canvas_height));
     form.append(
@@ -271,8 +297,12 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
         y: printArea.y,
         width: printArea.width,
         height: printArea.height,
-        rx: printArea.rx ?? printArea.ry ?? 0,
-        ry: printArea.ry ?? printArea.rx ?? 0,
+        rx: printArea.rtl ?? printArea.rx ?? printArea.ry ?? 0,
+        ry: printArea.rtr ?? printArea.ry ?? printArea.rx ?? 0,
+        rtl: printArea.rtl ?? printArea.rx ?? 0,
+        rtr: printArea.rtr ?? printArea.rx ?? 0,
+        rbr: printArea.rbr ?? printArea.rx ?? 0,
+        rbl: printArea.rbl ?? printArea.rx ?? 0,
       })
     );
     form.append("mask_zones", JSON.stringify(maskZones));
@@ -281,7 +311,11 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
       const r = await api.post("/admin/templates", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      toast.success(`Template uploaded successfully (v${r.data.version})`);
+      toast.success(
+        isDefault
+          ? `Default template saved (v${r.data.version}) — used for all models without their own overlay.`
+          : `Template uploaded successfully (v${r.data.version})`
+      );
       onOpenChange(false);
       onSuccess();
     } catch (e) {
@@ -298,13 +332,26 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
         className="max-w-3xl max-h-[90vh] overflow-y-auto bg-[#09090B] border-white/10 text-white"
       >
         <DialogHeader>
-          <DialogTitle>{locked ? "Replace Template" : "Upload Template"}</DialogTitle>
+          <DialogTitle>
+            {locked
+              ? (replaceTemplate?.is_default ? "Replace Default Template" : "Replace Template")
+              : isDefault
+                ? "Upload Default Template"
+                : "Upload Template"}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-6">
           <section>
-            <div className="label-eyebrow mb-3">Step A — Select target</div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="label-eyebrow mb-3">
+              {isDefault ? "Default overlay" : "Step A — Select target"}
+            </div>
+            {isDefault ? (
+              <p className="text-xs text-white/50">
+                Used when a model has no overlay of its own. Draw print area and camera cutouts after uploading the PNG.
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <label className="text-xs text-white/50 mb-1 block">Brand</label>
                 <Select
@@ -369,6 +416,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
                 </Select>
               </div>
             </div>
+            )}
           </section>
 
           <section>
@@ -461,7 +509,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
                 className="mt-2 text-xs text-brand-light/90 bg-brand/10 border border-brand/30 rounded-lg px-3 py-2"
                 data-testid="existing-template-warning"
               >
-                This will archive the existing v{existingVersion} and create v{existingVersion + 1}.
+                This will archive the existing {isDefault ? "default " : ""}v{existingVersion} and create v{existingVersion + 1}.
               </div>
             )}
           </section>
@@ -473,6 +521,9 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
                 Canvas size from PNG ({canvasDims.canvas_width || "…"}×
                 {canvasDims.canvas_height || "…"} px). Draw the blue print area on the phone body,
                 then add camera / flash cutouts. Customer artwork clips to print area minus those holes.
+                {isDefault
+                  ? " These zones apply everywhere this default overlay is used."
+                  : ""}
               </p>
               <ZoneEditor
                 imageFile={file}
@@ -504,7 +555,7 @@ function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate }) {
             onClick={handleSubmit}
             className="bg-brand hover:bg-brand/90 text-white"
           >
-            {submitting ? "Uploading…" : "Upload template"}
+            {submitting ? "Uploading…" : isDefault ? "Save default template" : "Upload template"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -646,7 +697,18 @@ function CloneModal({ open, onOpenChange, source, onSuccess, caseTypes = [] }) {
   );
 }
 
-function CaseTypeBadge({ slug, caseTypes = [] }) {
+function CaseTypeBadge({ slug, caseTypes = [], isDefault = false }) {
+  if (isDefault) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-brand/40 bg-brand/20 text-brand-light"
+        data-testid="case-badge-default"
+      >
+        All case types
+      </Badge>
+    );
+  }
   const label = caseTypeLabel(caseTypes, slug);
   return (
     <Badge
@@ -716,6 +778,7 @@ export default function Templates() {
 
   let lastBrand = "";
   let lastModel = "";
+  const modelTemplates = templates.filter((t) => !t.is_default);
 
   return (
     <div data-testid="admin-templates">
@@ -761,14 +824,14 @@ export default function Templates() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {templates.length === 0 && (
+            {modelTemplates.length === 0 && (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-white/40 py-10">
                   No templates yet. Upload your first frame overlay.
                 </TableCell>
               </TableRow>
             )}
-            {templates.map((tpl) => {
+            {modelTemplates.map((tpl) => {
               const rows = [];
               if (tpl.brand_name !== lastBrand) {
                 lastBrand = tpl.brand_name;
@@ -803,7 +866,7 @@ export default function Templates() {
                   </TableCell>
                   <TableCell className="text-white/80 pl-8">{tpl.model_name}</TableCell>
                   <TableCell>
-                    <CaseTypeBadge slug={tpl.case_type_slug} caseTypes={caseTypes} />
+                    <CaseTypeBadge slug={tpl.case_type_slug} caseTypes={caseTypes} isDefault={tpl.is_default} />
                   </TableCell>
                   <TableCell className="font-mono text-xs text-white/70">
                     {tpl.canvas_width}×{tpl.canvas_height}px

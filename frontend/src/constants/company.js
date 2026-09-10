@@ -88,5 +88,4 @@ export const CONTACT_SUBJECTS = [
   "General inquiry",
 ];
 
-/** Drop your AI-generated footer art at frontend/public/images/footer-bg.jpg */
-export const FOOTER_BG_IMAGE = "/images/footer-bg.jpg";
+export const FOOTER_BG_IMAGE = "/images/casebox-hero-premium.png";

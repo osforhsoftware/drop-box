@@ -1,5 +1,6 @@
 import { useLocation } from "react-router-dom";
 import { CONTACT } from "../constants/company";
+import { isAdminUiPath } from "../constants/nav";
 
 const WA_HREF = `https://wa.me/${CONTACT.whatsapp.digits}?text=${encodeURIComponent(
   CONTACT.whatsapp.enquiryText
@@ -21,7 +22,7 @@ function WhatsAppIcon({ className }) {
 export default function WhatsAppFloat() {
   const { pathname } = useLocation();
 
-  if (pathname.startsWith("/admin")) return null;
+  if (isAdminUiPath(pathname)) return null;
 
   return (
     <a

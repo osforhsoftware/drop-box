@@ -1,6 +1,6 @@
 /** Column counts per breakpoint (2-row grid on tablet+). */
 export const SHOWCASE_COLUMNS = {
-  desktop: 5,
+  desktop: 4,
   laptop: 4,
   tablet: 3,
 };

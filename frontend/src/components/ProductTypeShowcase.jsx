@@ -10,7 +10,6 @@ import { productGridClass } from "../constants/productGrid";
 import {
   SHOWCASE_BREAKPOINTS,
   SHOWCASE_COLUMNS,
-  SHOWCASE_MOBILE,
   chunkProducts,
 } from "../constants/showcaseConfig";
 import { TEMPLATE_PRODUCT_TYPE_SECTIONS } from "../constants/templateProducts";
@@ -41,8 +40,8 @@ function useSliderLayout() {
   if (isTabletUp) {
     return { cols: SHOWCASE_COLUMNS.tablet, rows: 2 };
   }
-  // Mobile: two-row grid, two products per row
-  return { cols: SHOWCASE_MOBILE.narrow.cols, rows: 2 };
+  // Mobile: two cards per row so more products are visible without extra scrolling.
+  return { cols: 2, rows: 2 };
 }
 
 /**
@@ -112,8 +111,9 @@ function filterParamsKey(params) {
 }
 
 /**
- * Two-row showcase: original case covers first, customized templates second.
+ * Two-row showcase: customized templates first, original covers second.
  * layout: "slider" (home) | "grid" (shop browse)
+ * afterSection: optional node rendered after a section (by slug)
  */
 export default function ProductTypeShowcase({
   layout = "slider",
@@ -123,7 +123,8 @@ export default function ProductTypeShowcase({
   onQuickView,
   onAddToCart,
   onBuyNow,
-  showSectionLinks = layout === "slider",
+  showSectionLinks = true,
+  afterSection = null,
   testId = "product-type-showcase",
 }) {
   const [sections, setSections] = useState(() =>
@@ -169,8 +170,8 @@ export default function ProductTypeShowcase({
         {TEMPLATE_PRODUCT_TYPE_SECTIONS.map((section) => (
           <div key={section.slug} className="space-y-4">
             <div className="h-8 w-56 bg-white/5 rounded animate-pulse" />
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {Array.from({ length: 4 }).map((_, i) => (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="aspect-[5/4] bg-white/5 rounded-2xl animate-pulse" />
               ))}
             </div>
@@ -195,53 +196,63 @@ export default function ProductTypeShowcase({
     <div className={`space-y-16 lg:space-y-20 ${className}`} data-testid={testId}>
       {TEMPLATE_PRODUCT_TYPE_SECTIONS.map((section) => {
         const items = sections[section.slug] || [];
-        if (!items.length) return null;
+        const after = afterSection?.[section.slug] || null;
+        if (!items.length) {
+          return after ? (
+            <div key={`after-${section.slug}`} className="space-y-10 lg:space-y-12">
+              {after}
+            </div>
+          ) : null;
+        }
 
         return (
-          <section key={section.slug} data-testid={`${testId}-${section.slug}`}>
-            <div className="mb-8 flex items-end justify-between gap-4 flex-wrap">
-              <div>
-                <div className="label-eyebrow">{section.eyebrow}</div>
-                <h2 className="font-display text-3xl lg:text-4xl mt-2">{section.label}</h2>
-                <p className="text-white/50 mt-2 max-w-lg text-sm">{section.description}</p>
+          <div key={section.slug} className="space-y-10 lg:space-y-12">
+            <section data-testid={`${testId}-${section.slug}`}>
+              <div className="mb-8 flex items-end justify-between gap-4 flex-wrap">
+                <div>
+                  <div className="label-eyebrow">{section.eyebrow}</div>
+                  <h2 className="font-display text-3xl lg:text-4xl mt-2">{section.label}</h2>
+                  <p className="text-white/50 mt-2 max-w-lg text-sm">{section.description}</p>
+                </div>
+                {showSectionLinks && (
+                  <Link
+                    to={`/shop?product_type=${section.slug}`}
+                    className="hidden sm:flex items-center gap-2 text-sm text-white/60 hover:text-brand transition-colors"
+                  >
+                    View all <ArrowRight className="w-4 h-4" />
+                  </Link>
+                )}
               </div>
-              {showSectionLinks && (
-                <Link
-                  to={`/shop?product_type=${section.slug}`}
-                  className="hidden sm:flex items-center gap-2 text-sm text-white/60 hover:text-brand transition-colors"
-                >
-                  View all <ArrowRight className="w-4 h-4" />
-                </Link>
+
+              {layout === "slider" ? (
+                <SliderRow items={items} />
+              ) : (
+                <div className={productGridClass(items.length)}>
+                  {items.map((t) => (
+                    <TemplateProductCard
+                      key={t.id}
+                      template={t}
+                      onQuickView={onQuickView}
+                      onAddToCart={onAddToCart}
+                      onBuyNow={onBuyNow}
+                    />
+                  ))}
+                </div>
               )}
-            </div>
 
-            {layout === "slider" ? (
-              <SliderRow items={items} />
-            ) : (
-              <div className={productGridClass(items.length)}>
-                {items.map((t) => (
-                  <TemplateProductCard
-                    key={t.id}
-                    template={t}
-                    onQuickView={onQuickView}
-                    onAddToCart={onAddToCart}
-                    onBuyNow={onBuyNow}
-                  />
-                ))}
-              </div>
-            )}
-
-            {showSectionLinks && (
-              <div className="text-center mt-6 sm:hidden">
-                <Link
-                  to={`/shop?product_type=${section.slug}`}
-                  className="btn-secondary text-sm inline-flex items-center gap-2"
-                >
-                  View all <ArrowRight className="w-4 h-4" />
-                </Link>
-              </div>
-            )}
-          </section>
+              {showSectionLinks && (
+                <div className="text-center mt-6 sm:hidden">
+                  <Link
+                    to={`/shop?product_type=${section.slug}`}
+                    className="btn-secondary text-sm inline-flex items-center gap-2"
+                  >
+                    View all <ArrowRight className="w-4 h-4" />
+                  </Link>
+                </div>
+              )}
+            </section>
+            {after}
+          </div>
         );
       })}
     </div>

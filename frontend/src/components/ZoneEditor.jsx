@@ -8,6 +8,11 @@ import {
   printAreaFromFabricRect,
   zoneFromFabricRect,
   zoneKindStyle,
+  attachIndependentCorners,
+  normalizeCornerRadii,
+  uniformCornerRadii,
+  clampIndependentCorner,
+  maxRadiusForCorner,
 } from "../lib/cameraZone";
 import { fitFabricCanvas } from "../lib/fabricFit";
 import { LOGO_COLOR } from "../constants/brand";
@@ -17,14 +22,19 @@ const PRINT_AREA_ID = "__print_area__";
 
 function makeZoneRect({ zone, interactive = false }) {
   const style = zoneKindStyle(zone.kind);
-  const r = zone.rx ?? zone.ry ?? defaultCornerRadius(zone.width, zone.height);
+  const corners = normalizeCornerRadii(
+    zone,
+    zone.width,
+    zone.height,
+    defaultCornerRadius(zone.width, zone.height)
+  );
   const rect = new fabric.Rect({
     left: zone.x,
     top: zone.y,
     width: zone.width,
     height: zone.height,
-    rx: r,
-    ry: r,
+    rx: corners.rtl,
+    ry: corners.rtl,
     originX: "left",
     originY: "top",
     fill: style.fill,
@@ -42,20 +52,26 @@ function makeZoneRect({ zone, interactive = false }) {
     hasBorders: interactive,
     objectCaching: false,
   });
+  attachIndependentCorners(rect, corners);
   rect.zoneId = zone.id;
   rect.zoneKind = zone.kind;
   return rect;
 }
 
 function makePrintAreaRect(area, interactive = true) {
-  const rx = printAreaCornerRadius(area.width, area.height, area.rx ?? area.ry);
+  const corners = normalizeCornerRadii(
+    area,
+    area.width,
+    area.height,
+    printAreaCornerRadius(area.width, area.height, area.rx ?? area.ry)
+  );
   const rect = new fabric.Rect({
     left: area.x,
     top: area.y,
     width: area.width,
     height: area.height,
-    rx,
-    ry: rx,
+    rx: corners.rtl,
+    ry: corners.rtl,
     originX: "left",
     originY: "top",
     fill: "rgba(96,165,250,0.12)",
@@ -73,6 +89,7 @@ function makePrintAreaRect(area, interactive = true) {
     hasBorders: interactive,
     objectCaching: false,
   });
+  attachIndependentCorners(rect, corners);
   rect.isPrintArea = true;
   rect.zoneId = PRINT_AREA_ID;
   return rect;
@@ -136,7 +153,7 @@ export default function ZoneEditor({
   activeKindRef.current = activeKind;
   const [activeZoneId, setActiveZoneId] = useState(null);
   const [printSelected, setPrintSelected] = useState(false);
-  const [cornerRadius, setCornerRadius] = useState(32);
+  const [radii, setRadii] = useState({ rtl: 32, rtr: 32, rbr: 32, rbl: 32 });
   const [loadError, setLoadError] = useState(null);
 
   zonesRef.current = zones;
@@ -149,6 +166,15 @@ export default function ZoneEditor({
     if (!c || !el || !w || !h) return;
     if (el.clientWidth < 40) return;
     fitFabricCanvas(c, el, w, h, 460);
+  }, []);
+
+  const adoptRadii = useCallback((shape, isPrint) => {
+    if (!shape || !shape.width || !shape.height) return;
+    const fallback = isPrint
+      ? printAreaCornerRadius(shape.width, shape.height, shape.rx)
+      : defaultCornerRadius(shape.width, shape.height);
+    const next = normalizeCornerRadii(shape, shape.width, shape.height, fallback);
+    setRadii({ rtl: next.rtl, rtr: next.rtr, rbr: next.rbr, rbl: next.rbl });
   }, []);
 
   const emitZones = useCallback(
@@ -172,10 +198,10 @@ export default function ZoneEditor({
       const next = zonesRef.current.map((z) =>
         z.id === rect.zoneId ? { ...z, ...updated, id: z.id, kind: z.kind, label: z.label } : z
       );
-      if (updated?.rx != null) setCornerRadius(updated.rx);
+      if (updated) adoptRadii({ ...updated, width: updated.width, height: updated.height }, false);
       emitZones(next);
     },
-    [emitZones]
+    [adoptRadii, emitZones]
   );
 
   const syncPrintRect = useCallback(
@@ -183,10 +209,10 @@ export default function ZoneEditor({
       if (!rect?.isPrintArea) return;
       const updated = printAreaFromFabricRect(rect);
       if (!updated) return;
-      setCornerRadius(updated.rx);
+      adoptRadii(updated, true);
       emitPrintArea(updated);
     },
-    [emitPrintArea]
+    [adoptRadii, emitPrintArea]
   );
 
   const bindZoneRect = useCallback(
@@ -200,10 +226,10 @@ export default function ZoneEditor({
         setActiveZoneId(rect.zoneId);
         setActiveKind(rect.zoneKind || "camera");
         const z = zonesRef.current.find((x) => x.id === rect.zoneId);
-        if (z?.rx != null) setCornerRadius(z.rx);
+        if (z) adoptRadii(z, false);
       });
     },
-    [syncZoneRect]
+    [adoptRadii, syncZoneRect]
   );
 
   const bindPrintRect = useCallback(
@@ -217,10 +243,10 @@ export default function ZoneEditor({
         setActiveZoneId(null);
         setActiveKind(PRINT_MODE);
         const area = printAreaFromFabricRect(rect);
-        if (area?.rx != null) setCornerRadius(area.rx);
+        if (area) adoptRadii(area, true);
       });
     },
-    [syncPrintRect]
+    [adoptRadii, syncPrintRect]
   );
 
   const removeZone = useCallback(
@@ -249,26 +275,26 @@ export default function ZoneEditor({
     c?.renderAll();
   }, [emitPrintArea]);
 
-  const applyCornerRadius = useCallback(
-    (value) => {
+  const applyOneRadius = useCallback(
+    (key, value) => {
       const c = fabricRef.current;
       if (!c) return;
-      const r = Math.max(0, Number(value) || 0);
-      if (printSelected && printRectRef.current) {
-        printRectRef.current.set({ rx: r, ry: r });
-        c.renderAll();
-        syncPrintRect(printRectRef.current);
-        return;
-      }
-      const id = activeZoneId;
-      if (!id) return;
-      const rect = rectMapRef.current.get(id);
-      if (!rect) return;
-      rect.set({ rx: r, ry: r });
+      const target = printSelected && printRectRef.current
+        ? printRectRef.current
+        : activeZoneId
+          ? rectMapRef.current.get(activeZoneId)
+          : null;
+      if (!target) return;
+      const w = target.width * (target.scaleX || 1);
+      const h = target.height * (target.scaleY || 1);
+      const next = clampIndependentCorner(radii, key, value, w, h);
+      setRadii({ rtl: next.rtl, rtr: next.rtr, rbr: next.rbr, rbl: next.rbl });
+      attachIndependentCorners(target, next);
       c.renderAll();
-      syncZoneRect(rect);
+      if (printSelected) syncPrintRect(target);
+      else syncZoneRect(target);
     },
-    [activeZoneId, printSelected, syncPrintRect, syncZoneRect]
+    [activeZoneId, printSelected, radii, syncPrintRect, syncZoneRect]
   );
 
   const mountPrintArea = useCallback(
@@ -422,19 +448,18 @@ export default function ZoneEditor({
           c.remove(draft);
 
           if (activeKindRef.current === PRINT_MODE) {
-            const rx = printAreaCornerRadius(rw, rh);
+            const corners = uniformCornerRadii(printAreaCornerRadius(rw, rh), rw, rh);
             const area = {
               x: Math.round(draft.left),
               y: Math.round(draft.top),
               width: Math.round(rw),
               height: Math.round(rh),
-              rx,
-              ry: rx,
+              ...corners,
             };
             mountPrintArea(c, area);
             setPrintSelected(true);
             setActiveZoneId(null);
-            setCornerRadius(rx);
+            adoptRadii(area, true);
             emitPrintArea(area);
             if (printRectRef.current) c.setActiveObject(printRectRef.current);
             c.renderAll();
@@ -443,6 +468,7 @@ export default function ZoneEditor({
 
           const style = zoneKindStyle(activeKindRef.current);
           const id = newZoneId();
+          const corners = uniformCornerRadii(defaultCornerRadius(rw, rh), rw, rh);
           const zone = {
             id,
             kind: activeKindRef.current,
@@ -452,8 +478,7 @@ export default function ZoneEditor({
             y: Math.round(draft.top),
             width: Math.round(rw),
             height: Math.round(rh),
-            rx: defaultCornerRadius(rw, rh),
-            ry: defaultCornerRadius(rw, rh),
+            ...corners,
           };
           const rect = makeZoneRect({ zone, interactive: true });
           bindZoneRect(rect);
@@ -461,7 +486,7 @@ export default function ZoneEditor({
           rectMapRef.current.set(id, rect);
           setPrintSelected(false);
           setActiveZoneId(id);
-          setCornerRadius(zone.rx);
+          adoptRadii(zone, false);
           emitZones([...zonesRef.current, zone]);
           c.setActiveObject(rect);
           c.renderAll();
@@ -538,7 +563,10 @@ export default function ZoneEditor({
         current.y === next.y &&
         current.width === next.width &&
         current.height === next.height &&
-        current.rx === next.rx);
+        current.rtl === next.rtl &&
+        current.rtr === next.rtr &&
+        current.rbr === next.rbr &&
+        current.rbl === next.rbl);
     if (same) return;
     mountPrintArea(c, next);
     c.renderAll();
@@ -571,7 +599,7 @@ export default function ZoneEditor({
               fabricRef.current.setActiveObject(printRectRef.current);
               fabricRef.current.renderAll();
               const area = printAreaFromFabricRect(printRectRef.current);
-              if (area?.rx != null) setCornerRadius(area.rx);
+              if (area) adoptRadii(area, true);
             }
           }}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
@@ -649,9 +677,7 @@ export default function ZoneEditor({
                     setPrintSelected(true);
                     setActiveZoneId(null);
                     setActiveKind(PRINT_MODE);
-                    setCornerRadius(
-                      printArea.rx ?? printAreaCornerRadius(printArea.width, printArea.height)
-                    );
+                    adoptRadii(printArea, true);
                     if (printRectRef.current && fabricRef.current) {
                       fabricRef.current.setActiveObject(printRectRef.current);
                       fabricRef.current.renderAll();
@@ -662,7 +688,6 @@ export default function ZoneEditor({
                   <span className="text-white/80 truncate">Print area</span>
                   <span className="font-mono text-white/35 truncate">
                     {printArea.width}×{printArea.height}
-                    {printArea.rx != null ? ` · r${printArea.rx}` : ""}
                   </span>
                 </button>
                 <button
@@ -692,7 +717,7 @@ export default function ZoneEditor({
                       setPrintSelected(false);
                       setActiveZoneId(z.id);
                       setActiveKind(z.kind || "camera");
-                      setCornerRadius(z.rx ?? defaultCornerRadius(z.width, z.height));
+                      adoptRadii(z, false);
                       const rect = rectMapRef.current.get(z.id);
                       if (rect && fabricRef.current) {
                         fabricRef.current.setActiveObject(rect);
@@ -722,24 +747,49 @@ export default function ZoneEditor({
       )}
 
       {radiusTarget && ready && (
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <label className="text-white/50 shrink-0">
+        <div className="space-y-3 text-xs">
+          <div className="text-white/50">
             Corner radius · <span className="text-white/70">{radiusLabel}</span>
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(8, Math.round(Math.min(radiusTarget.width, radiusTarget.height) * 0.5))}
-            value={cornerRadius}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setCornerRadius(v);
-              applyCornerRadius(v);
-            }}
-            data-testid="zone-corner-radius"
-            className="flex-1 min-w-[120px] accent-brand"
-          />
-          <span className="font-mono text-white/40 w-10 text-right">{cornerRadius}px</span>
+            <span className="text-white/35"> — each corner separately</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              { key: "rtl", label: "Top left" },
+              { key: "rtr", label: "Top right" },
+              { key: "rbl", label: "Bottom left" },
+              { key: "rbr", label: "Bottom right" },
+            ].map(({ key, label }) => {
+              const max = Math.max(
+                0,
+                Math.round(maxRadiusForCorner(radii, key, radiusTarget.width, radiusTarget.height))
+              );
+              return (
+                <div key={key} className="min-w-0 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                  <div className="text-white/55 mb-1.5">{label}</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(max, Math.round(radii[key]) || 0)}
+                      value={Math.round(radii[key]) || 0}
+                      onChange={(e) => applyOneRadius(key, Number(e.target.value))}
+                      data-testid={`zone-corner-${key}`}
+                      className="min-w-0 flex-1 accent-brand"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      max={max}
+                      value={Math.round(radii[key]) || 0}
+                      onChange={(e) => applyOneRadius(key, Number(e.target.value))}
+                      className="w-16 shrink-0 rounded border border-white/10 bg-black/30 px-1.5 py-1 font-mono text-white/80 text-right"
+                      data-testid={`zone-corner-${key}-input`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

@@ -27,7 +27,7 @@ function uniqueProducts(items) {
 function ShowcaseSkeleton() {
   return (
     <div className={SHOP_PRODUCT_GRID} data-testid="product-showcase-loading">
-      {Array.from({ length: 6 }).map((_, i) => (
+      {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="aspect-[5/4] bg-white/5 rounded-2xl animate-pulse" />
       ))}
     </div>
@@ -109,7 +109,7 @@ export default function ProductShowcase({
   eyebrow = "Ready-made designs",
   shopLink = "/shop",
   limit = SHOWCASE_DEFAULTS.fetchLimit,
-  displayCount = 6,
+  displayCount = 8,
   autoplay = SHOWCASE_DEFAULTS.autoplay,
   autoplayDelay = SHOWCASE_DEFAULTS.autoplayDelay,
   loop = SHOWCASE_DEFAULTS.loop,

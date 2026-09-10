@@ -15,7 +15,6 @@ export const BOTTOM_NAV_ITEMS = [
     label: "Design",
     testId: "bottom-nav-design",
     icon: "palette",
-    featured: true,
   },
   {
     to: "/contact",
@@ -34,3 +33,9 @@ export const BOTTOM_NAV_ITEMS = [
 
 /** Total height reserved for the fixed mobile bottom bar (content + safe area). */
 export const MOBILE_BOTTOM_NAV_HEIGHT = 68;
+
+export const ADMIN_LOGIN_PATH = "/casebox-login";
+
+export function isAdminUiPath(pathname) {
+  return pathname.startsWith("/admin") || pathname === ADMIN_LOGIN_PATH;
+}

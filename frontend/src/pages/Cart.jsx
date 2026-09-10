@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Trash2, Plus, Minus, ShoppingBag, ArrowRight } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { resolveMediaUrl } from "../lib/api";
-import { setDraft } from "../lib/draft";
+import { replaceDraft } from "../lib/draft";
 import { formatPrice } from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
 
@@ -32,7 +32,7 @@ export default function Cart() {
     const itemsToCheckout = cartItems.filter((i) => selectedItems[i.cart_id]);
     if (itemsToCheckout.length === 0) return;
 
-    setDraft({
+    replaceDraft({
       source: "cart",
       items: itemsToCheckout,
     });

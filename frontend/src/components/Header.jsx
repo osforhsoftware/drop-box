@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   ShoppingBag,
   User,
@@ -11,6 +12,9 @@ import {
   LayoutDashboard,
   Menu,
   Sparkles,
+  Search,
+  ArrowRight,
+  X,
 } from "lucide-react";
 import SiteLogo from "./SiteLogo";
 import { useAuth } from "../lib/auth";
@@ -22,16 +26,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-  SheetClose,
-} from "./ui/sheet";
 import { LOGOUT } from "../constants/testIds/auth";
-import { NAV_LINKS } from "../constants/nav";
+import { NAV_LINKS, isAdminUiPath } from "../constants/nav";
 
 import { useCart } from "../lib/cart";
 
@@ -72,92 +68,87 @@ function NavItem({ link, className = navLinkClass, onNavigate }) {
   );
 }
 
+const accountLinkClass =
+  "flex items-center gap-3 text-[15px] text-neutral-700 hover:text-neutral-900 px-1 py-2.5 rounded-lg hover:bg-neutral-50 transition-colors";
+
 function AuthActions({ user, loading, logout, className = "", onNavigate }) {
   if (loading) return null;
 
   if (!user) {
     return (
-      <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-2 ${className}`}>
-        <SheetClose asChild>
-          <Link
-            to="/login"
-            data-testid="header-sign-in"
-            onClick={onNavigate}
-            className="btn-secondary text-sm px-4 py-2 text-center"
-          >
-            Sign in
-          </Link>
-        </SheetClose>
-        <SheetClose asChild>
-          <Link
-            to="/register"
-            data-testid="header-sign-up"
-            onClick={onNavigate}
-            className="text-sm text-white/70 hover:text-white transition-colors px-4 py-2 text-center"
-          >
-            Sign up
-          </Link>
-        </SheetClose>
+      <div className={`flex flex-col items-stretch gap-2 ${className}`}>
+        <Link
+          to="/login"
+          data-testid="header-sign-in"
+          onClick={onNavigate}
+          className="btn-secondary text-sm px-4 py-2.5 text-center rounded-full"
+        >
+          Sign in
+        </Link>
+        <Link
+          to="/login"
+          data-testid="header-sign-up"
+          onClick={onNavigate}
+          className="text-sm text-neutral-500 hover:text-neutral-900 transition-colors px-4 py-2 text-center"
+        >
+          Sign up
+        </Link>
       </div>
     );
   }
 
   return (
-    <div className={`space-y-2 ${className}`}>
+    <div className={`space-y-0.5 ${className}`}>
       {user.role === "admin" && (
-        <SheetClose asChild>
-          <Link
-            to="/admin"
-            data-testid="header-admin-dashboard"
-            className="flex items-center gap-2 text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/[0.04]"
-          >
-            <LayoutDashboard className="w-4 h-4" />
-            Admin dashboard
-          </Link>
-        </SheetClose>
+        <Link
+          to="/admin"
+          data-testid="header-admin-dashboard"
+          onClick={onNavigate}
+          className={accountLinkClass}
+        >
+          <LayoutDashboard className="w-4 h-4" />
+          Admin dashboard
+        </Link>
       )}
       {user.role === "customer" && (
         <>
-          <SheetClose asChild>
-            <Link
-              to="/profile"
-              data-testid="header-profile"
-              className="flex items-center gap-2 text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/[0.04]"
-            >
-              <MapPin className="w-4 h-4" />
-              Profile &amp; address
-            </Link>
-          </SheetClose>
-          <SheetClose asChild>
-            <Link
-              to="/profile#orders"
-              data-testid="header-orders"
-              className="flex items-center gap-2 text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/[0.04]"
-            >
-              <Package className="w-4 h-4" />
-              My orders
-            </Link>
-          </SheetClose>
-          <SheetClose asChild>
-            <Link
-              to="/wishlist"
-              data-testid="header-wishlist"
-              className="flex items-center gap-2 text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/[0.04]"
-            >
-              <Heart className="w-4 h-4" />
-              Wishlist
-            </Link>
-          </SheetClose>
+          <Link
+            to="/profile"
+            data-testid="header-profile"
+            onClick={onNavigate}
+            className={accountLinkClass}
+          >
+            <MapPin className="w-4 h-4" />
+            Profile &amp; address
+          </Link>
+          <Link
+            to="/profile#orders"
+            data-testid="header-orders"
+            onClick={onNavigate}
+            className={accountLinkClass}
+          >
+            <Package className="w-4 h-4" />
+            My orders
+          </Link>
+          <Link
+            to="/wishlist"
+            data-testid="header-wishlist"
+            onClick={onNavigate}
+            className={accountLinkClass}
+          >
+            <Heart className="w-4 h-4" />
+            Wishlist
+          </Link>
         </>
       )}
       <button
         type="button"
         data-testid={LOGOUT.button}
         onClick={() => {
-          logout();
+          logout({ redirectTo: "/" });
           onNavigate?.();
         }}
-        className="flex items-center gap-2 text-sm text-white/80 hover:text-white px-3 py-2 rounded-lg hover:bg-white/[0.04] w-full"
+        className={`${accountLinkClass} w-full`}
       >
         <LogOut className="w-4 h-4" />
         Sign out
@@ -166,31 +157,67 @@ function AuthActions({ user, loading, logout, className = "", onNavigate }) {
   );
 }
 
+function mobileNavClass({ isActive }) {
+  return [
+    "block w-full text-left text-[17px] font-medium px-1 py-3 rounded-lg transition-colors",
+    isActive ? "text-brand-dark" : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50",
+  ].join(" ");
+}
+
 export default function Header() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, loading, logout } = useAuth();
   const { cartItems } = useCart();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const onAdmin = location.pathname.startsWith("/admin");
-  if (onAdmin) return null;
+  const onAdmin = isAdminUiPath(location.pathname);
 
   const closeMobile = () => setMobileOpen(false);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname, location.hash]);
+
+  useEffect(() => {
+    if (!mobileOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [mobileOpen]);
+
+  if (onAdmin) return null;
 
   return (
     <header
       data-testid="site-header"
-      className="sticky top-0 z-40 glass border-b border-brand/15"
+      className="site-header sticky top-0 z-40"
     >
-      <div className="max-w-7xl mx-auto px-6 lg:px-10 h-16 flex items-center justify-between">
+      <div className="hidden md:block border-b border-white/[0.06] bg-[#080a08]">
+        <div className="max-w-[92rem] mx-auto px-6 lg:px-10 h-8 flex items-center justify-between text-[11px] text-white/55">
+          <span>Made with care in India · Tracked nationwide delivery</span>
+          <Link to="/customize" className="flex items-center gap-1 text-white/80 hover:text-brand-light transition-colors">
+            Create your first case <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+      </div>
+
+      <div className="max-w-[92rem] mx-auto px-4 sm:px-6 lg:px-10 h-16 md:h-[4.5rem] flex items-center gap-5">
         <Link
           to="/"
           data-testid="logo-link"
           className="flex items-center group"
         >
-          <SiteLogo className="h-9 sm:h-10" />
+          <SiteLogo className="h-9 sm:h-9" />
         </Link>
 
-        <nav className="hidden md:flex items-center gap-8 text-sm text-white/70">
+        <nav className="hidden lg:flex items-center gap-7 ml-5 text-[13px] text-white/70">
           {NAV_LINKS.map((link) => (
             <NavItem
               key={link.label}
@@ -200,18 +227,33 @@ export default function Header() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <form
+          className="hidden md:flex flex-1 max-w-md ml-auto"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const query = new FormData(event.currentTarget).get("search")?.toString().trim();
+            navigate(query ? `/shop?search=${encodeURIComponent(query)}` : "/shop");
+          }}
+          role="search"
+        >
+          <label className="header-search">
+            <Search className="w-4 h-4" aria-hidden="true" />
+            <input name="search" type="search" placeholder="Search designs" aria-label="Search designs" />
+          </label>
+        </form>
+
+        <div className="flex items-center gap-1.5 sm:gap-2 ml-auto md:ml-0">
           {!loading && !user && (
             <div className="hidden md:flex items-center gap-2 sm:gap-3">
               <Link
                 to="/login"
                 data-testid="header-sign-in"
-                className="btn-secondary text-sm px-3 sm:px-4 py-2"
+                className="header-icon-button text-xs px-3 py-2"
               >
                 Sign in
               </Link>
               <Link
-                to="/register"
+                to="/login"
                 data-testid="header-sign-up"
                 className="text-sm text-white/70 hover:text-white transition-colors px-1"
               >
@@ -300,7 +342,7 @@ export default function Header() {
                   )}
                   <DropdownMenuItem
                     data-testid={LOGOUT.button}
-                    onClick={() => logout()}
+                    onClick={() => logout({ redirectTo: "/" })}
                     className="cursor-pointer text-white/80 focus:text-white focus:bg-white/[0.06]"
                   >
                     <LogOut className="w-4 h-4" />
@@ -314,7 +356,7 @@ export default function Header() {
           <Link
             to="/cart"
             data-testid="header-cart"
-            className="btn-secondary text-sm flex items-center gap-2 relative p-2 sm:px-3 sm:py-2 rounded-lg"
+            className="header-icon-button text-sm flex items-center gap-2 relative p-2.5"
           >
             <ShoppingBag className="w-4 h-4" />
             <span className="hidden sm:inline">Cart</span>
@@ -328,95 +370,117 @@ export default function Header() {
           <Link
             to="/customize"
             data-testid="header-cta"
-            className="btn-primary text-sm flex items-center gap-2 hidden sm:flex"
+            className="btn-primary text-xs items-center gap-2 hidden xl:flex !py-2.5 !px-4"
           >
             <Sparkles className="w-4 h-4" />
             <span>Start Design</span>
           </Link>
 
-          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-            <SheetTrigger
-              data-testid="mobile-menu-toggle"
-              className="md:hidden p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/[0.04] transition-colors outline-none"
-              aria-label="Open menu"
-            >
-              <Menu className="w-5 h-5" />
-            </SheetTrigger>
-            <SheetContent
-              side="right"
-              className="glass border-white/10 w-[min(100vw,20rem)] p-0 flex flex-col"
-            >
-              <SheetHeader className="px-6 py-5 border-b border-white/[0.06] text-left">
-                <SheetTitle className="text-white font-display text-lg">Menu</SheetTitle>
-              </SheetHeader>
-
-              <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
-                {NAV_LINKS.map((link) =>
-                  link.hash ? (
-                    <SheetClose key={link.label} asChild>
-                      <a
-                        href={link.to}
-                        data-testid={link.testId}
-                        onClick={closeMobile}
-                        className="block w-full text-left text-base px-3 py-3 rounded-lg text-white/70 hover:text-brand-light hover:bg-white/[0.04] transition-colors"
-                      >
-                        {link.label}
-                      </a>
-                    </SheetClose>
-                  ) : (
-                    <SheetClose key={link.label} asChild>
-                      <NavLink
-                        to={link.to}
-                        end={link.end}
-                        data-testid={link.testId}
-                        onClick={closeMobile}
-                        className="block w-full text-left text-base px-3 py-3 rounded-lg text-white/70 hover:text-brand-light hover:bg-white/[0.04] transition-colors"
-                      >
-                        {link.label}
-                      </NavLink>
-                    </SheetClose>
-                  )
-                )}
-              </nav>
-
-              <div className="border-t border-white/[0.06] px-4 py-5 space-y-4">
-                {!loading && user && (
-                  <div className="px-3 pb-2">
-                    <div className="text-sm text-white truncate">{user.name || displayName(user)}</div>
-                    <div className="text-xs text-white/50 truncate">{user.email}</div>
-                  </div>
-                )}
-
-                <AuthActions user={user} loading={loading} logout={logout} onNavigate={closeMobile} />
-
-                <SheetClose asChild>
-                  <Link
-                    to="/cart"
-                    data-testid="mobile-header-cart"
-                    onClick={closeMobile}
-                    className="btn-secondary text-sm flex items-center justify-center gap-2 w-full mb-3"
-                  >
-                    <ShoppingBag className="w-4 h-4" />
-                    Cart ({cartItems.length})
-                  </Link>
-                </SheetClose>
-
-                <SheetClose asChild>
-                  <Link
-                    to="/customize"
-                    data-testid="mobile-header-cta"
-                    onClick={closeMobile}
-                    className="btn-primary text-sm flex items-center justify-center gap-2 w-full"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Start Design
-                  </Link>
-                </SheetClose>
-              </div>
-            </SheetContent>
-          </Sheet>
+          <button
+            type="button"
+            data-testid="mobile-menu-toggle"
+            className="header-icon-button lg:!hidden p-2.5 outline-none"
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-drop-menu"
+            onClick={() => setMobileOpen((open) => !open)}
+          >
+            {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
         </div>
       </div>
+
+      {mobileOpen &&
+        createPortal(
+          <div className="lg:hidden fixed inset-0 top-0 z-[60] h-dvh w-full">
+            <button
+              type="button"
+              className="absolute inset-0 h-full w-full bg-black/40"
+              aria-label="Close menu"
+              onClick={closeMobile}
+            />
+            <div
+              id="mobile-drop-menu"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Menu"
+              className="mobile-menu-dropdown absolute top-0 left-0 flex h-dvh min-h-0 w-[min(85vw,22.5rem)] flex-col overflow-hidden bg-white shadow-[8px_24px_48px_rgba(16,24,16,0.18)]"
+            >
+              <div className="flex items-center justify-between px-6 py-4 pt-[max(1rem,env(safe-area-inset-top))]">
+                <p className="text-lg font-semibold tracking-tight text-neutral-800">Menu</p>
+                <button
+                  type="button"
+                  onClick={closeMobile}
+                  className="grid h-8 w-8 place-items-center rounded-full border border-neutral-200 text-neutral-600 hover:bg-neutral-50"
+                  aria-label="Close menu"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <nav className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
+                {NAV_LINKS.map((link) =>
+                  link.hash ? (
+                    <a
+                      key={link.label}
+                      href={link.to}
+                      data-testid={link.testId}
+                      onClick={closeMobile}
+                      className="block w-full text-left text-[17px] font-medium px-1 py-3 rounded-lg text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 transition-colors"
+                    >
+                      {link.label}
+                    </a>
+                  ) : (
+                    <NavLink
+                      key={link.label}
+                      to={link.to}
+                      end={link.end}
+                      data-testid={link.testId}
+                      onClick={closeMobile}
+                      className={mobileNavClass}
+                    >
+                      {link.label}
+                    </NavLink>
+                  )
+                )}
+
+                <div className="mt-3 border-t border-neutral-100 pt-4 pb-2">
+                  {!loading && user && (
+                    <div className="px-1 pb-3">
+                      <div className="text-sm font-medium text-neutral-800 truncate">
+                        {user.name || displayName(user)}
+                      </div>
+                      <div className="text-xs text-neutral-500 truncate">{user.email}</div>
+                    </div>
+                  )}
+                  <AuthActions user={user} loading={loading} logout={logout} onNavigate={closeMobile} />
+                </div>
+              </nav>
+
+              <div className="space-y-3 border-t border-neutral-100 px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                <Link
+                  to="/cart"
+                  data-testid="mobile-header-cart"
+                  onClick={closeMobile}
+                  className="btn-secondary !rounded-2xl text-sm flex items-center justify-center gap-2 w-full"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  Cart ({cartItems.length})
+                </Link>
+                <Link
+                  to="/customize"
+                  data-testid="mobile-header-cta"
+                  onClick={closeMobile}
+                  className="btn-primary text-sm flex items-center justify-center gap-2 w-full"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  Start Design
+                </Link>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </header>
   );
 }

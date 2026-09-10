@@ -19,7 +19,7 @@ const COLLECTIONS = [
 ];
 
 const PHONE_BRANDS = [
-  "Apple", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
+  "Apple", "Akkukkaa", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
 ];
 
 /** Shop listing type: pre-designed art vs blank/original case (customizable). */

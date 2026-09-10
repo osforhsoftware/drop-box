@@ -1,4 +1,4 @@
-import { Check, Eye, Heart, Loader2, ShoppingBag, Zap } from "lucide-react";
+import { Check, Eye, Heart, Loader2, ShoppingBag } from "lucide-react";
 
 function ActionButton({
   label,
@@ -10,6 +10,8 @@ function ActionButton({
   icon: Icon,
   activeIcon: ActiveIcon,
   testId,
+  variant = "icon",
+  className = "",
 }) {
   const isLoading = state === "loading";
   const isSuccess = state === "success";
@@ -22,9 +24,9 @@ function ActionButton({
       disabled={disabled || isLoading}
       aria-label={label}
       data-testid={testId}
-      className={`product-card-action-btn${active ? " is-active" : ""}${pop ? " is-pop" : ""}${
+      className={`product-card-action-btn product-card-action-btn--${variant}${active ? " is-active" : ""}${pop ? " is-pop" : ""}${
         isSuccess ? " is-success" : ""
-      }`}
+      }${className ? ` ${className}` : ""}`}
     >
       {isLoading ? (
         <Loader2 className="w-[18px] h-[18px] animate-spin" aria-hidden />
@@ -43,7 +45,6 @@ export default function ProductCardActionBar({
   mobile = false,
   onQuickView,
   onAddToCart,
-  onBuyNow,
   onWishlist,
   wishlisted = false,
   wishPop = false,
@@ -64,51 +65,46 @@ export default function ProductCardActionBar({
       aria-label="Product actions"
       onClick={stop}
     >
-      {onQuickView && (
-        <ActionButton
-          label="Quick view"
-          icon={Eye}
-          onClick={(e) => {
-            stop(e);
-            onQuickView();
-          }}
-          testId={productSlug ? `quick-view-${productSlug}` : undefined}
-        />
-      )}
-      {onAddToCart && (
-        <ActionButton
-          label="Add to cart"
-          icon={ShoppingBag}
-          activeIcon={Check}
-          state={cartState}
-          onClick={(e) => {
-            stop(e);
-            onAddToCart();
-          }}
-        />
-      )}
-      {onBuyNow && (
-        <ActionButton
-          label="Buy now"
-          icon={Zap}
-          onClick={(e) => {
-            stop(e);
-            onBuyNow();
-          }}
-        />
-      )}
-      {onWishlist && (
-        <ActionButton
-          label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
-          icon={Heart}
-          active={wishlisted}
-          pop={wishPop}
-          onClick={(e) => {
-            stop(e);
-            onWishlist();
-          }}
-        />
-      )}
+      <div className="product-card-side-actions">
+        {onWishlist && (
+          <ActionButton
+            label={wishlisted ? "Remove from wishlist" : "Add to wishlist"}
+            icon={Heart}
+            active={wishlisted}
+            pop={wishPop}
+            onClick={(e) => {
+              stop(e);
+              onWishlist();
+            }}
+          />
+        )}
+        {onQuickView && !mobile && (
+          <ActionButton
+            label="Quick view"
+            icon={Eye}
+            className="product-card-action-btn--view"
+            onClick={(e) => {
+              stop(e);
+              onQuickView();
+            }}
+            testId={productSlug ? `quick-view-${productSlug}` : undefined}
+          />
+        )}
+        {onAddToCart && (
+          <ActionButton
+            label="Add to cart"
+            icon={ShoppingBag}
+            activeIcon={Check}
+            variant="cart"
+            state={cartState}
+            onClick={(e) => {
+              stop(e);
+              onAddToCart();
+            }}
+            testId={productSlug ? `add-to-cart-${productSlug}` : undefined}
+          />
+        )}
+      </div>
     </div>
   );
 }

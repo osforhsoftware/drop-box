@@ -14,6 +14,7 @@ export const LOGIN = {
 	emailInput: 'login-email-input',
 	passwordInput: 'login-password-input',
 	submitButton: 'login-submit-button',
+	googleButton: 'login-google-button',
 	forgotPasswordLink: 'login-forgot-password-link',
 	registerLink: 'login-register-link',
 };

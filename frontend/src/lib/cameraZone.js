@@ -32,6 +32,138 @@ export function printAreaCornerRadius(width, height, preferred) {
   return Math.min(56, Math.max(24, Math.round(Math.min(width, height) * 0.06)));
 }
 
+export function clampCornerRadius(value, width, height) {
+  return Math.max(0, Math.min(Number(value) || 0, width / 2, height / 2));
+}
+
+export function fitCornerRadii(width, height, radii = {}) {
+  let rtl = Math.max(0, Number(radii.rtl) || 0);
+  let rtr = Math.max(0, Number(radii.rtr) || 0);
+  let rbr = Math.max(0, Number(radii.rbr) || 0);
+  let rbl = Math.max(0, Number(radii.rbl) || 0);
+  const factor = Math.min(
+    1,
+    width / Math.max(rtl + rtr, 1e-6),
+    width / Math.max(rbl + rbr, 1e-6),
+    height / Math.max(rtl + rbl, 1e-6),
+    height / Math.max(rtr + rbr, 1e-6)
+  );
+  return {
+    rtl: +(rtl * factor).toFixed(2),
+    rtr: +(rtr * factor).toFixed(2),
+    rbr: +(rbr * factor).toFixed(2),
+    rbl: +(rbl * factor).toFixed(2),
+  };
+}
+
+/** Max px for one corner without shrinking the other three. */
+export function maxRadiusForCorner(radii, key, width, height) {
+  const rtl = Number(radii?.rtl) || 0;
+  const rtr = Number(radii?.rtr) || 0;
+  const rbr = Number(radii?.rbr) || 0;
+  const rbl = Number(radii?.rbl) || 0;
+  const half = Math.min(width, height) / 2;
+  if (key === "rtl") return Math.max(0, Math.min(half, width - rtr, height - rbl));
+  if (key === "rtr") return Math.max(0, Math.min(half, width - rtl, height - rbr));
+  if (key === "rbr") return Math.max(0, Math.min(half, width - rbl, height - rtr));
+  return Math.max(0, Math.min(half, width - rbr, height - rtl));
+}
+
+export function clampIndependentCorner(radii, key, value, width, height) {
+  const next = {
+    rtl: Math.round(Number(radii?.rtl) || 0),
+    rtr: Math.round(Number(radii?.rtr) || 0),
+    rbr: Math.round(Number(radii?.rbr) || 0),
+    rbl: Math.round(Number(radii?.rbl) || 0),
+  };
+  next[key] = Math.round(Math.max(0, Math.min(Number(value) || 0, maxRadiusForCorner(next, key, width, height))));
+  return { ...next, rx: next.rtl, ry: next.rtr };
+}
+
+/** Per-corner radii (CSS order: TL, TR, BR, BL). Falls back to uniform rx. */
+export function normalizeCornerRadii(raw, width, height, uniformFallback = 0) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const uniform = clampCornerRadius(src.rx ?? src.ry ?? uniformFallback, width, height);
+  const pick = (key) => Math.round(clampCornerRadius(src[key] != null ? src[key] : uniform, width, height));
+  const next = {
+    rtl: pick("rtl"),
+    rtr: pick("rtr"),
+    rbr: pick("rbr"),
+    rbl: pick("rbl"),
+  };
+  return {
+    ...next,
+    rx: next.rtl,
+    ry: next.rtr,
+  };
+}
+
+export function uniformCornerRadii(radius, width, height) {
+  const r = clampCornerRadius(radius, width, height);
+  return { rtl: r, rtr: r, rbr: r, rbl: r, rx: r, ry: r };
+}
+
+function traceRoundedRect(ctx, x, y, w, h, radii) {
+  const r = fitCornerRadii(w, h, radii);
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(x, y, w, h, [r.rtl, r.rtr, r.rbr, r.rbl]);
+    return;
+  }
+  ctx.moveTo(x + r.rtl, y);
+  ctx.lineTo(x + w - r.rtr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r.rtr);
+  ctx.lineTo(x + w, y + h - r.rbr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r.rbr, y + h);
+  ctx.lineTo(x + r.rbl, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r.rbl);
+  ctx.lineTo(x, y + r.rtl);
+  ctx.quadraticCurveTo(x, y, x + r.rtl, y);
+  ctx.closePath();
+}
+
+/** Draw independent corner radii on a Fabric Rect (rx/ry alone cannot do this). */
+export function attachIndependentCorners(rect, radii) {
+  if (!rect) return rect;
+  const w = rect.width || 1;
+  const h = rect.height || 1;
+  const next = normalizeCornerRadii(radii, w, h, radii?.rx ?? rect.rx ?? 0);
+  rect.cornerRadii = { rtl: next.rtl, rtr: next.rtr, rbr: next.rbr, rbl: next.rbl };
+  rect.set({ rx: next.rtl, ry: next.rtl });
+  rect._render = function renderIndependentCorners(ctx) {
+    const width = this.width;
+    const height = this.height;
+    traceRoundedRect(
+      ctx,
+      -width / 2,
+      -height / 2,
+      width,
+      height,
+      this.cornerRadii || { rtl: this.rx, rtr: this.rx, rbr: this.rx, rbl: this.rx }
+    );
+    if (typeof this._renderPaintInOrder === "function") {
+      this._renderPaintInOrder(ctx);
+    } else {
+      this._renderFill(ctx);
+      this._renderStroke(ctx);
+    }
+  };
+  return rect;
+}
+
+function radiiFromFabricRect(rect, width, height, uniformFallback) {
+  const scale = rect.scaleX || 1;
+  const src = rect.cornerRadii
+    ? {
+        rtl: rect.cornerRadii.rtl * scale,
+        rtr: rect.cornerRadii.rtr * scale,
+        rbr: rect.cornerRadii.rbr * scale,
+        rbl: rect.cornerRadii.rbl * scale,
+      }
+    : { rx: (rect.rx || 0) * scale };
+  return normalizeCornerRadii(src, width, height, uniformFallback);
+}
+
 function zoneDim(raw, ...keys) {
   if (!raw || typeof raw !== "object") return null;
   for (const k of keys) {
@@ -83,10 +215,11 @@ function normalizeRectZone(raw, defaults = {}) {
     (raw.type && raw.type !== "rect" ? raw.type : null) ||
     "camera";
   const rxRaw = raw.rx != null ? Number(raw.rx) : raw.ry != null ? Number(raw.ry) : null;
-  const rx =
+  const fallback =
     rxRaw != null && !Number.isNaN(rxRaw)
       ? Math.max(0, rxRaw)
       : defaultCornerRadius(width, height);
+  const corners = normalizeCornerRadii(raw, width, height, fallback);
   const style = zoneKindStyle(kind);
   return {
     id: raw.id || defaults.id || `zone-${kind}`,
@@ -98,8 +231,7 @@ function normalizeRectZone(raw, defaults = {}) {
     y,
     width,
     height,
-    rx,
-    ry: raw.ry != null && !Number.isNaN(Number(raw.ry)) ? Number(raw.ry) : rx,
+    ...corners,
   };
 }
 
@@ -160,26 +292,26 @@ export function normalizePrintArea(template, canvasW = 0, canvasH = 0) {
   if (raw && typeof raw === "object") {
     const checked = validateRectArea(raw, "print_area");
     if (checked.ok) {
-      const rx = printAreaCornerRadius(
+      const corners = normalizeCornerRadii(
+        raw,
         checked.area.width,
         checked.area.height,
-        raw.rx ?? raw.ry ?? checked.area.rx ?? checked.area.ry
+        printAreaCornerRadius(checked.area.width, checked.area.height, raw.rx ?? raw.ry)
       );
       return {
         x: checked.area.x,
         y: checked.area.y,
         width: checked.area.width,
         height: checked.area.height,
-        rx,
-        ry: rx,
+        ...corners,
       };
     }
   }
   const cw = Number(template?.canvas_width) || canvasW || 0;
   const ch = Number(template?.canvas_height) || canvasH || 0;
   if (cw > 0 && ch > 0) {
-    const rx = printAreaCornerRadius(cw, ch);
-    return { x: 0, y: 0, width: cw, height: ch, rx, ry: rx };
+    const corners = uniformCornerRadii(printAreaCornerRadius(cw, ch), cw, ch);
+    return { x: 0, y: 0, width: cw, height: ch, ...corners };
   }
   console.warn("[cameraZone] print_area: no valid print area or canvas size", {
     print_area: raw,
@@ -195,15 +327,14 @@ export function printAreaFromFabricRect(rect) {
   const width = Math.round(rect.width * (rect.scaleX || 1));
   const height = Math.round(rect.height * (rect.scaleY || 1));
   if (!width || !height) return null;
-  const scale = rect.scaleX || 1;
-  const rx = printAreaCornerRadius(width, height, Math.round((rect.rx || 0) * scale));
+  const fallback = printAreaCornerRadius(width, height);
+  const corners = radiiFromFabricRect(rect, width, height, fallback);
   return {
     x: Math.round(rect.left),
     y: Math.round(rect.top),
     width,
     height,
-    rx,
-    ry: rx,
+    ...corners,
   };
 }
 
@@ -263,10 +394,10 @@ export function zoneFromFabricRect(rect, meta = {}) {
   if (!rect) return null;
   const width = Math.round(rect.width * (rect.scaleX || 1));
   const height = Math.round(rect.height * (rect.scaleY || 1));
-  const scale = rect.scaleX || 1;
-  const rx = Math.round((rect.rx || 0) * scale);
   const kind = rect.zoneKind || meta.kind || "camera";
   const style = zoneKindStyle(kind);
+  const fallback = defaultCornerRadius(width, height);
+  const corners = radiiFromFabricRect(rect, width, height, fallback);
   return {
     id: rect.zoneId || meta.id,
     kind,
@@ -277,26 +408,28 @@ export function zoneFromFabricRect(rect, meta = {}) {
     y: Math.round(rect.top),
     width,
     height,
-    rx: rx || defaultCornerRadius(width, height),
-    ry: rx || defaultCornerRadius(width, height),
+    ...corners,
   };
 }
 
 export function roundedRectPathD(x, y, w, h, r) {
-  const rad = Math.min(Math.max(0, r), w / 2, h / 2);
+  const corners =
+    r && typeof r === "object"
+      ? fitCornerRadii(w, h, r)
+      : fitCornerRadii(w, h, { rtl: r, rtr: r, rbr: r, rbl: r });
   const x2 = x + w;
   const y2 = y + h;
   // Use explicit L/Q (not H/V alone) so Fabric's path parser always closes all 4 sides.
   return [
-    `M ${x + rad} ${y}`,
-    `L ${x2 - rad} ${y}`,
-    `Q ${x2} ${y} ${x2} ${y + rad}`,
-    `L ${x2} ${y2 - rad}`,
-    `Q ${x2} ${y2} ${x2 - rad} ${y2}`,
-    `L ${x + rad} ${y2}`,
-    `Q ${x} ${y2} ${x} ${y2 - rad}`,
-    `L ${x} ${y + rad}`,
-    `Q ${x} ${y} ${x + rad} ${y}`,
+    `M ${x + corners.rtl} ${y}`,
+    `L ${x2 - corners.rtr} ${y}`,
+    `Q ${x2} ${y} ${x2} ${y + corners.rtr}`,
+    `L ${x2} ${y2 - corners.rbr}`,
+    `Q ${x2} ${y2} ${x2 - corners.rbr} ${y2}`,
+    `L ${x + corners.rbl} ${y2}`,
+    `Q ${x} ${y2} ${x} ${y2 - corners.rbl}`,
+    `L ${x} ${y + corners.rtl}`,
+    `Q ${x} ${y} ${x + corners.rtl} ${y}`,
     "Z",
   ].join(" ");
 }
@@ -315,8 +448,13 @@ function appendExclusionPath(d, zone) {
     return `${d} ${circlePathD(zone.x, zone.y, zone.r)}`;
   }
   if ((zone.shape === "rect" || zone.type === "rect") && zone.width > 0 && zone.height > 0) {
-    const rx = zone.rx ?? zone.ry ?? defaultCornerRadius(zone.width, zone.height);
-    return `${d} ${roundedRectPathD(zone.x, zone.y, zone.width, zone.height, rx)}`;
+    const corners = normalizeCornerRadii(
+      zone,
+      zone.width,
+      zone.height,
+      zone.rx ?? zone.ry ?? defaultCornerRadius(zone.width, zone.height)
+    );
+    return `${d} ${roundedRectPathD(zone.x, zone.y, zone.width, zone.height, corners)}`;
   }
   if ((zone.shape === "polygon" || zone.type === "polygon") && zone.points?.length >= 3) {
     const pts = zone.points.map((p) => `${p.x} ${p.y}`).join(" L ");
@@ -330,8 +468,13 @@ export function printableAreaEvenOddPath(printArea, exclusionZones) {
   const checked = validateRectArea(printArea, "print_area path");
   if (!checked.ok) return null;
   const { x, y, width, height } = checked.area;
-  const rx = printAreaCornerRadius(width, height, printArea.rx ?? printArea.ry);
-  let d = roundedRectPathD(x, y, width, height, rx);
+  const corners = normalizeCornerRadii(
+    printArea,
+    width,
+    height,
+    printAreaCornerRadius(width, height, printArea.rx ?? printArea.ry)
+  );
+  let d = roundedRectPathD(x, y, width, height, corners);
   for (const z of exclusionZones || []) {
     d = appendExclusionPath(d, z);
   }
@@ -357,7 +500,12 @@ export function createPrintAreaOutline(printArea, { interactive = false } = {}) 
   if (!checked.ok) return null;
 
   const { x, y, width, height } = checked.area;
-  const rx = printAreaCornerRadius(width, height, printArea.rx ?? printArea.ry);
+  const corners = normalizeCornerRadii(
+    printArea,
+    width,
+    height,
+    printAreaCornerRadius(width, height, printArea.rx ?? printArea.ry)
+  );
 
   // Fabric 7 defaults origin to center — left/top must be top-left of the print area.
   const rect = new fabric.Rect({
@@ -365,8 +513,8 @@ export function createPrintAreaOutline(printArea, { interactive = false } = {}) 
     top: y,
     width,
     height,
-    rx,
-    ry: rx,
+    rx: corners.rtl,
+    ry: corners.rtl,
     originX: "left",
     originY: "top",
     fill: PRINT_AREA_STYLE.fill,
@@ -381,6 +529,7 @@ export function createPrintAreaOutline(printArea, { interactive = false } = {}) 
     excludeFromExport: true,
     objectCaching: false,
   });
+  attachIndependentCorners(rect, corners);
   rect.isPrintAreaGuide = true;
   return rect;
 }
@@ -401,19 +550,27 @@ export function fabricClipPathForZone(zone, { inverted = false } = {}) {
   if (zone.shape === "rect" || zone.type === "rect") {
     const checked = validateRectArea(zone, "clip zone");
     if (!checked.ok) return null;
-    const rx = zone.rx ?? zone.ry ?? defaultCornerRadius(zone.width, zone.height);
-    return new fabric.Rect({
+    const corners = normalizeCornerRadii(
+      zone,
+      zone.width,
+      zone.height,
+      zone.rx ?? zone.ry ?? defaultCornerRadius(zone.width, zone.height)
+    );
+    const clip = new fabric.Rect({
       left: zone.x,
       top: zone.y,
       width: zone.width,
       height: zone.height,
-      rx,
-      ry: zone.ry ?? rx,
+      rx: corners.rtl,
+      ry: corners.rtl,
       originX: "left",
       originY: "top",
       absolutePositioned: true,
       inverted: Boolean(inverted),
+      objectCaching: false,
     });
+    attachIndependentCorners(clip, corners);
+    return clip;
   }
   if ((zone.shape === "polygon" || zone.type === "polygon") && Array.isArray(zone.points) && zone.points.length >= 3) {
     return new fabric.Polygon(zone.points, {
@@ -443,18 +600,26 @@ export function fabricClipPathForPrintableArea(printArea, exclusionZones, canvas
   if (!pa && !zones.length) return null;
 
   if (!zones.length && pa) {
-    const rx = printAreaCornerRadius(pa.width, pa.height, pa.rx ?? pa.ry);
-    return new fabric.Rect({
+    const corners = normalizeCornerRadii(
+      pa,
+      pa.width,
+      pa.height,
+      printAreaCornerRadius(pa.width, pa.height, pa.rx ?? pa.ry)
+    );
+    const clip = new fabric.Rect({
       left: pa.x,
       top: pa.y,
       width: pa.width,
       height: pa.height,
-      rx,
-      ry: rx,
+      rx: corners.rtl,
+      ry: corners.rtl,
       originX: "left",
       originY: "top",
       absolutePositioned: true,
+      objectCaching: false,
     });
+    attachIndependentCorners(clip, corners);
+    return clip;
   }
 
   const pathD = pa

@@ -22,12 +22,12 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
         className="glass rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto grid md:grid-cols-2 gap-6 p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="relative min-h-[280px] md:min-h-[420px] rounded-xl overflow-hidden bg-zinc-900/50">
+        <div className="relative min-h-[280px] md:min-h-[420px] rounded-xl overflow-hidden bg-neutral-100">
           {previewImage ? (
             <img
               src={previewImage}
               alt={displayTemplateTitle(item.title)}
-              className="absolute inset-0 w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-contain p-3"
             />
           ) : (
             <div className="absolute inset-0 grid place-items-center text-sm text-white/40">
@@ -82,14 +82,14 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
               <span className="text-white/40 line-through">{formatPrice(item.price)}</span>
             )}
           </div>
-          <div className="mt-6 flex gap-3">
+          <div className="mt-6 btn-row">
             {!adminPreview && onBuyNow && (
               <button
                 type="button"
                 onClick={() => onBuyNow?.(item)}
-                className="btn-primary flex-1 flex items-center justify-center gap-2"
+                className="btn-primary"
               >
-                <ShoppingBag className="w-4 h-4" /> Buy Now
+                <ShoppingBag aria-hidden /> Buy Now
               </button>
             )}
             {item.status === "published" && (
@@ -97,9 +97,9 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
                 to={`/template/${item.slug}`}
                 target={adminPreview ? "_blank" : undefined}
                 rel={adminPreview ? "noopener noreferrer" : undefined}
-                className={`btn-secondary flex items-center justify-center gap-2 ${adminPreview ? "flex-1" : "px-4"}`}
+                className="btn-secondary"
               >
-                {adminPreview ? "View on shop" : "Details"} <ArrowRight className="w-4 h-4" />
+                {adminPreview ? "View on shop" : "Details"} <ArrowRight aria-hidden />
               </Link>
             )}
             {adminPreview && item.status !== "published" && (

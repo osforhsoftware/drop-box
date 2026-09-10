@@ -15,7 +15,7 @@ export const TEMPLATE_COLLECTIONS = [
 ];
 
 export const TEMPLATE_PHONE_BRANDS = [
-  "Apple", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
+  "Apple", "Akkukkaa", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
 ];
 
 export const TEMPLATE_PRODUCT_TYPES = [
@@ -25,16 +25,16 @@ export const TEMPLATE_PRODUCT_TYPES = [
 
 export const TEMPLATE_PRODUCT_TYPE_SECTIONS = [
   {
-    slug: "original",
-    label: "Original Case Covers",
-    eyebrow: "Blank cases",
-    description: "Clean original cases with no print — order as-is for a minimal look.",
-  },
-  {
     slug: "customized",
     label: "Customized Case Templates",
     eyebrow: "Pre-designed",
     description: "Ready-made designs with art already on the case — pick your phone and order instantly.",
+  },
+  {
+    slug: "original",
+    label: "Original Case Covers",
+    eyebrow: "Blank cases",
+    description: "Clean original cases with no print — order as-is for a minimal look.",
   },
 ];
 

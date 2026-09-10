@@ -1,10 +1,15 @@
 import ProductTypeShowcase from "./ProductTypeShowcase";
 
-/** Home page: Original + Customized paged grid sliders (manual swipe, no autoplay). */
-export default function FeaturedTemplatesSlider() {
+/** Home page: Customized templates, then optional promo, then Original covers. */
+export default function FeaturedTemplatesSlider({ afterSection = null }) {
   return (
     <section className="py-16 lg:py-20" data-testid="featured-templates">
-      <ProductTypeShowcase layout="slider" limit={20} className="max-w-7xl mx-auto px-6 lg:px-10" />
+      <ProductTypeShowcase
+        layout="grid"
+        limit={8}
+        className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10"
+        afterSection={afterSection}
+      />
     </section>
   );
 }

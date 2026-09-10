@@ -13,6 +13,15 @@ const STATUS_STEPS = [
   { key: "delivered", label: "Delivered", icon: Check },
 ];
 
+function progressSteps(order) {
+  const razorpay = order?.payment_method === "razorpay" || Boolean(order?.razorpay_payment_id);
+  return STATUS_STEPS.map((step) => (
+    step.key === "pending_payment_verification"
+      ? { ...step, label: razorpay ? "Awaiting payment" : "Payment Verification" }
+      : step
+  ));
+}
+
 export default function OrderStatus() {
   const { orderId } = useParams();
   const navigate = useNavigate();
@@ -39,7 +48,10 @@ export default function OrderStatus() {
     if (input.trim()) navigate(`/track/${input.trim()}`);
   };
 
-  const currentIdx = order ? STATUS_STEPS.findIndex((s) => s.key === order.delivery_status) : -1;
+  const steps = order ? progressSteps(order) : STATUS_STEPS;
+  const currentIdx = order ? steps.findIndex((s) => s.key === order.delivery_status) : -1;
+  const unpaidRazorpay = order && (order.payment_method === "razorpay" || order.razorpay_payment_id)
+    && order.payment_status !== "approved";
 
   return (
     <div data-testid="track-page" className="max-w-4xl mx-auto px-6 lg:px-10 py-12">
@@ -63,22 +75,78 @@ export default function OrderStatus() {
               <div>
                 <div className="label-eyebrow">Order ID</div>
                 <div className="font-mono text-2xl text-brand">{order.order_id}</div>
-                {!order.items && (
-                  <div className="text-white/60 mt-2 text-sm">
-                    {order.brand_name} · {order.model_name} · {order.product_name}
-                  </div>
-                )}
+                <div className="text-white/60 mt-2 text-sm" data-testid="order-selected-device">
+                  <span className="text-white/40">Device · </span>
+                  {order.brand_name} · {order.model_name}
+                  {order.product_name ? ` · ${order.product_name}` : ""}
+                </div>
               </div>
               {!order.items && order.preview_url && (
                 <img src={resolveMediaUrl(order.preview_url)} alt="" className="w-20 h-32 object-cover rounded-lg border border-white/10" />
               )}
             </div>
 
+            {order.payment_status === "failed" && (
+              <div className="mt-6 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3">
+                Payment failed{order.payment_failure_reason ? `: ${order.payment_failure_reason}` : "."} You can try again below.
+              </div>
+            )}
+
             <div className="mt-8 grid sm:grid-cols-2 gap-4">
               <Card label="Payment status" value={prettify(order.payment_status)} />
               <Card label="Delivery status" value={prettify(order.delivery_status)} />
               <Card label="Total Amount" value={`₹${order.amount}`} />
+              {order.payment_method && (
+                <Card label="Payment method" value={prettify(order.payment_method)} />
+              )}
             </div>
+
+            {unpaidRazorpay && (
+              <button
+                type="button"
+                data-testid="track-pay-now"
+                className="btn-primary mt-6"
+                onClick={() => navigate(`/payment/${order.order_id}`)}
+              >
+                Pay now
+              </button>
+            )}
+
+            {(order.razorpay_payment_id || order.payment_method === "razorpay") && (
+              <div className="mt-8 glass-2 rounded-xl p-4" data-testid="order-payment-details">
+                <div className="label-eyebrow mb-3">Order details · Razorpay</div>
+                <div className="space-y-2 text-sm text-white/70">
+                  <DetailRow label="Device" value={`${order.brand_name || "—"} · ${order.model_name || "—"}`} />
+                  <DetailRow label="Payment ID" value={order.razorpay_payment_id || "—"} mono />
+                  <DetailRow label="Razorpay order" value={order.razorpay_order_id || "—"} mono />
+                  <DetailRow label="Paid via" value={prettify(order.razorpay_method || "—")} />
+                  <DetailRow
+                    label="Verified at"
+                    value={order.payment_verified_at ? new Date(order.payment_verified_at).toLocaleString("en-IN") : "—"}
+                  />
+                  <DetailRow label="Status" value={prettify(order.payment_status)} />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-8 glass-2 rounded-xl p-4" data-testid="order-device-details">
+              <div className="label-eyebrow mb-3">Selected device</div>
+              <div className="space-y-2 text-sm text-white/70">
+                <DetailRow label="Brand" value={order.brand_name || "—"} />
+                <DetailRow label="Model" value={order.model_name || "—"} />
+                <DetailRow label="Case type" value={order.product_name || "—"} />
+              </div>
+            </div>
+
+            {order.utr && order.payment_method !== "razorpay" && (
+              <div className="mt-8 glass-2 rounded-xl p-4" data-testid="order-upi-details">
+                <div className="label-eyebrow mb-3">Order details · UPI</div>
+                <div className="space-y-2 text-sm text-white/70">
+                  <DetailRow label="UTR" value={order.utr} mono />
+                  <DetailRow label="Status" value={prettify(order.payment_status)} />
+                </div>
+              </div>
+            )}
 
             {order.items && order.items.length > 0 && (
               <div className="mt-8">
@@ -132,7 +200,7 @@ export default function OrderStatus() {
             <div className="mt-10">
               <div className="label-eyebrow mb-4">Progress</div>
               <div className="space-y-3">
-                {STATUS_STEPS.map((s, i) => {
+                {steps.map((s, i) => {
                   const Icon = s.icon;
                   const done = i <= currentIdx;
                   return (
@@ -168,6 +236,15 @@ function Card({ label, value }) {
     <div className="glass-2 rounded-xl p-4">
       <div className="label-eyebrow">{label}</div>
       <div className="mt-2 font-medium">{value}</div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value, mono }) {
+  return (
+    <div className="flex flex-wrap justify-between gap-2">
+      <span className="text-white/40">{label}</span>
+      <span className={`text-white/90 text-right break-all ${mono ? "font-mono text-xs" : ""}`}>{value}</span>
     </div>
   );
 }

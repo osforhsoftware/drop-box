@@ -1,106 +1,248 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight } from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowRight, Check, ShieldCheck, Sparkles, Truck } from "lucide-react";
+import { api, resolveMediaUrl } from "../lib/api";
+
+export const DEFAULT_HERO_SLIDES = [
+  {
+    src: "/images/hero/botanical.png",
+    alt: "Three premium matte phone cases with botanical and geometric prints in a dark studio",
+    fit: "cover",
+  },
+  {
+    src: "/images/hero/couple.jpg",
+    alt: "Matching couple phone cases with illustrated characters",
+    fit: "contain",
+  },
+  {
+    src: "/images/hero/custom.jpg",
+    alt: "Custom photo phone cases with personal portraits",
+    fit: "contain",
+  },
+  {
+    src: "/images/hero/name.jpg",
+    alt: "Personalized name phone cases with carpet and floral prints",
+    fit: "contain",
+  },
+];
+
+export const HERO_SLIDES = DEFAULT_HERO_SLIDES;
 
 export const HERO_CONTENT = {
-  videoSrc: "/videos/06254.mp4",
-  posterSrc: "/images/frame-tum.jpg",
-  eyebrow: "Studio · Print · India · Shipped in 72h",
+  posterSrc: HERO_SLIDES[0].src,
+  eyebrow: "Shop premium phone cases",
   title: (
     <>
-      The case that
+      Protection that fits.
       <br />
-      <span className="text-brand-gradient">looks like you</span>.
+      <span className="text-brand-gradient">Style that stands out.</span>
+    </>
+  ),
+  mobileTitle: (
+    <>
+      Find your
+      <br />
+      <span className="text-brand-gradient">perfect case.</span>
     </>
   ),
   subtitle:
-    "Upload a photo, an illustration, a memory. We turn it into a precision-printed phone case — engineered to outlast trends.",
-  primaryCta: { label: "Start designing", to: "/customize" },
-  secondaryCta: { label: "How it works", href: "#how-it-works" },
-  tags: ["UV print 1200dpi", "Scratch resistant", "Lifetime art"],
+    "Discover artist-designed phone cases in botanical, minimal, abstract, and statement styles. Choose your exact model and find your perfect match.",
+  mobileSubtitle: "Shop premium designs made for your exact phone model.",
+  primaryCta: { label: "Shop all cases", mobileLabel: "Shop cases", to: "/shop" },
+  secondaryCta: { label: "Explore new arrivals", mobileLabel: "New arrivals", to: "/shop?sort=newest" },
 };
 
-export default function VideoHero({ content = HERO_CONTENT }) {
-  const videoRef = useRef(null);
-  const [videoReady, setVideoReady] = useState(false);
-  const [videoFailed, setVideoFailed] = useState(false);
+function prefersReducedMotion() {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
-  const showPoster = !videoReady || videoFailed;
+function HeroMediaSlider({ slides, interval = 4200 }) {
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [enableTransition, setEnableTransition] = useState(true);
+  const indexRef = useRef(0);
+  const touchStartX = useRef(0);
+  const looping = slides.length > 1;
+  const trackSlides = looping ? [...slides, slides[0]] : slides;
+
+  indexRef.current = index;
+
+  useEffect(() => {
+    if (paused || !looping || prefersReducedMotion()) return undefined;
+    const timer = window.setInterval(() => {
+      setEnableTransition(true);
+      setIndex((current) => current + 1);
+    }, interval);
+    return () => window.clearInterval(timer);
+  }, [paused, looping, interval]);
+
+  const goTo = (next) => {
+    if (!looping) return;
+    setEnableTransition(true);
+    setIndex(next);
+  };
+
+  const onTransitionEnd = (event) => {
+    if (event.target !== event.currentTarget) return;
+    if (!looping || index < slides.length) return;
+    setEnableTransition(false);
+    setIndex(0);
+  };
+
+  const onPointerDown = (event) => {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    touchStartX.current = event.clientX;
+    setPaused(true);
+  };
+
+  const onPointerUp = (event) => {
+    setPaused(false);
+    const delta = event.clientX - touchStartX.current;
+    if (Math.abs(delta) < 36) return;
+    const current = indexRef.current;
+    if (delta < 0) {
+      goTo(current + 1);
+      return;
+    }
+    if (current === 0) {
+      setEnableTransition(false);
+      setIndex(slides.length);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => goTo(slides.length - 1));
+      });
+      return;
+    }
+    goTo(current - 1);
+  };
 
   return (
-    <section className="p-0 sm:p-[30px]" data-testid="video-hero">
-      <div className="relative w-full min-h-[100svh] sm:min-h-[min(82vh,860px)] rounded-none sm:rounded-2xl overflow-hidden border-0 sm:border sm:border-white/[0.08] shadow-none sm:shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-        {/* Poster / thumbnail — always rendered; visible when video hasn't loaded or failed */}
-        <img
-          src={content.posterSrc}
-          alt=""
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${
-            showPoster ? "opacity-100" : "opacity-0"
-          }`}
-        />
+    <div
+      className="hero-banner__slider"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      aria-roledescription="carousel"
+      aria-label="Featured phone case photography"
+    >
+      <div
+        className={`hero-banner__track${enableTransition ? "" : " is-instant"}`}
+        style={{ transform: `translate3d(-${index * 100}%, 0, 0)` }}
+        onTransitionEnd={onTransitionEnd}
+      >
+        {trackSlides.map((slide, slideIndex) => (
+          <div className="hero-banner__slide" key={`${slide.src}-${slideIndex}`} aria-hidden={slideIndex !== index}>
+            <img
+              src={slide.src}
+              alt={slideIndex === index ? slide.alt : ""}
+              className={`hero-banner__slide-image${slide.fit === "contain" ? " is-contain" : ""}`}
+              draggable="false"
+              {...(slideIndex === 0 ? { fetchPriority: "high" } : { loading: "lazy" })}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-        {!videoFailed && (
-          <video
-            ref={videoRef}
-            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${
-              videoReady ? "opacity-100" : "opacity-0"
-            }`}
-            autoPlay
-            muted
-            loop
-            playsInline
-            poster={content.posterSrc}
-            onCanPlay={() => setVideoReady(true)}
-            onError={() => {
-              setVideoFailed(true);
-              setVideoReady(false);
-            }}
-          >
-            <source src={content.videoSrc} type="video/mp4" />
-          </video>
-        )}
+export default function VideoHero({ content = HERO_CONTENT, slides: slidesProp }) {
+  const [slides, setSlides] = useState(slidesProp || DEFAULT_HERO_SLIDES);
 
-        {/* Stripe-style overlays */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0d0d0d] via-[#0d0d0d]/50 to-[#0d0d0d]/20" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0d0d0d]/80 via-transparent to-transparent" />
-        <div className="absolute inset-0 pointer-events-none opacity-[0.35] mix-blend-overlay bg-[radial-gradient(circle_at_70%_20%,rgba(109,177,97,0.22),transparent_55%)]" />
+  useEffect(() => {
+    if (slidesProp) {
+      setSlides(slidesProp);
+      return undefined;
+    }
+    let cancelled = false;
+    api.get("/hero-slides")
+      .then((response) => {
+        const items = Array.isArray(response.data?.slides) ? response.data.slides : [];
+        const next = items
+          .map((item) => ({
+            src: resolveMediaUrl(item.image_url),
+            alt: item.alt || item.title || "Featured phone case",
+            fit: item.fit === "contain" ? "contain" : "cover",
+          }))
+          .filter((item) => item.src);
+        if (!cancelled && next.length) setSlides(next);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [slidesProp]);
 
-        {/* Bottom-left copy */}
-        <div className="absolute inset-0 flex flex-col justify-end p-8 sm:p-10 lg:p-14">
-          <div className="max-w-2xl">
-            <div className="label-eyebrow mb-5 sm:mb-6">{content.eyebrow}</div>
-            <h1 className="text-4xl sm:text-5xl lg:text-7xl font-display font-medium tracking-tighter leading-[0.95]">
+  const sliderKey = slides.map((slide) => slide.src).join("|");
+  return (
+    <section className="hero-shell" data-testid="video-hero">
+      <div className="hero-banner">
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          className="hero-banner__content"
+        >
+          <div className="max-w-[38rem]">
+            <div className="hero-offer-pill">
+              <span>New</span>
+              <span className="hero-offer-pill__desktop">Fresh designs for 15+ phone brands</span>
+              <span className="hero-offer-pill__mobile">15+ phone brands</span>
+            </div>
+            <div className="label-eyebrow mb-4 sm:mb-5 hidden sm:block">{content.eyebrow}</div>
+            <h1 className="hidden sm:block text-[2.65rem] sm:text-6xl lg:text-[4.5rem] font-display font-semibold tracking-[-0.055em] leading-[0.94]">
               {content.title}
             </h1>
-            <p className="mt-5 sm:mt-6 text-base sm:text-lg text-white/75 max-w-xl leading-relaxed">
+            <h1 className="sm:hidden font-display font-semibold tracking-[-0.055em] leading-[0.94]">
+              {content.mobileTitle}
+            </h1>
+            <p className="hidden sm:block mt-5 sm:mt-6 text-sm sm:text-lg text-white/70 max-w-lg leading-relaxed">
               {content.subtitle}
             </p>
-            <div className="mt-8 sm:mt-10 flex flex-wrap gap-3 sm:gap-4">
+            <p className="sm:hidden mt-4 text-sm text-white/70 max-w-[17rem] leading-relaxed">
+              {content.mobileSubtitle}
+            </p>
+            <div className="mt-7 sm:mt-9 flex flex-wrap gap-3">
               <Link
                 to={content.primaryCta.to}
                 data-testid="hero-start-btn"
-                className="btn-primary flex items-center gap-2"
+                className="btn-primary inline-flex items-center gap-2"
               >
-                {content.primaryCta.label}{" "}
+                <span className="hidden sm:inline">{content.primaryCta.label}</span>
+                <span className="sm:hidden">{content.primaryCta.mobileLabel}</span>
                 <ArrowRight className="w-4 h-4" />
               </Link>
-              <a href={content.secondaryCta.href} className="btn-secondary">
-                {content.secondaryCta.label}
-              </a>
+              <Link to={content.secondaryCta.to} className="hero-secondary-cta btn-secondary">
+                <span className="hidden sm:inline">{content.secondaryCta.label}</span>
+                <span className="sm:hidden">{content.secondaryCta.mobileLabel}</span>
+              </Link>
             </div>
-            <div className="mt-8 sm:mt-10 flex flex-wrap items-center gap-4 sm:gap-6 text-[10px] sm:text-xs text-white/40 font-mono uppercase tracking-widest">
-              {content.tags.map((tag, i) => (
-                <span key={tag} className="flex items-center gap-4 sm:gap-6">
-                  {i > 0 && <span className="hidden sm:inline">·</span>}
-                  {tag}
-                </span>
+            <div className="hero-trust-line" aria-label="Store benefits">
+              {["Precision fit", "Secure checkout", "Made in India"].map((item) => (
+                <span key={item}><Check aria-hidden="true" />{item}</span>
               ))}
             </div>
           </div>
-        </div>
+        </motion.div>
 
-        {/* Subtle frame highlight */}
-        <div className="absolute inset-0 rounded-none sm:rounded-2xl ring-1 ring-inset ring-white/[0.06] pointer-events-none" />
+        <div className="hero-banner__media">
+          <HeroMediaSlider key={sliderKey} slides={slides} />
+        </div>
+      </div>
+
+      <div className="hero-benefits" aria-label="Shopping benefits">
+        {[
+          { icon: Sparkles, title: "Premium print", copy: "Vibrant 1200dpi UV finish" },
+          { icon: ShieldCheck, title: "Everyday protection", copy: "Durable, scratch-resistant shell" },
+          { icon: Truck, title: "Pan-India delivery", copy: "Tracked shipping in 3–5 days" },
+        ].map(({ icon: Icon, title, copy }) => (
+          <div key={title} className="hero-benefit">
+            <span className="hero-benefit__icon"><Icon aria-hidden="true" /></span>
+            <span>
+              <strong>{title}</strong>
+              <small>{copy}</small>
+            </span>
+          </div>
+        ))}
       </div>
     </section>
   );

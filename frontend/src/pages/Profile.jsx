@@ -159,7 +159,7 @@ export default function Profile() {
               <div className="text-white/50 text-sm">Loading orders…</div>
             ) : orders.length === 0 ? (
               <div className="text-white/50 text-sm">
-                No orders yet.{" "}
+                No confirmed orders yet.{" "}
                 <Link to="/customize" className="text-brand-light hover:text-brand-accent">
                   Start designing
                 </Link>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { X } from "lucide-react";
 import { api, resolveMediaUrl } from "../lib/api";
@@ -36,28 +37,28 @@ export default function OfferPopup() {
     <img
       src={imgSrc}
       alt={offer.title || "Special offer"}
-      className="w-full h-auto max-h-[75vh] object-contain rounded-xl"
+      className="offer-popup-image"
     />
   );
 
-  return (
+  return createPortal(
     <div
       data-testid="offer-popup"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
+      className="offer-popup fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
       onClick={dismiss}
       role="dialog"
       aria-modal="true"
       aria-label={offer.title || "Promotional offer"}
     >
       <div
-        className="relative w-full max-w-[min(92vw,480px)] max-h-[85vh] overflow-y-auto"
+        className="offer-popup-panel relative"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           type="button"
           onClick={dismiss}
           data-testid="offer-popup-close"
-          className="absolute -top-1 -right-1 sm:top-2 sm:right-2 z-10 min-w-[44px] min-h-[44px] grid place-items-center rounded-full bg-black/60 border border-white/20 text-white hover:bg-black/80 transition-colors"
+          className="offer-popup-close"
           aria-label="Close popup"
         >
           <X className="w-5 h-5" />
@@ -77,6 +78,7 @@ export default function OfferPopup() {
           image
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

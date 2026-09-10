@@ -84,18 +84,24 @@ export default function ShopByCategory() {
   if (!categories || categories.length === 0) return null;
 
   return (
-    <section className="py-12 bg-[#0a0a0a]">
+    <section className="py-16 sm:py-20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10">
-        <div className="mb-8 flex flex-col items-center md:items-start text-center md:text-left">
-          <h2 className="font-display text-2xl md:text-3xl lg:text-4xl text-white">
+        <div className="mb-8 flex items-end justify-between gap-4">
+          <div>
+          <div className="label-eyebrow mb-2">Find your fit</div>
+          <h2 className="font-display text-3xl md:text-4xl text-white">
             Shop by Category
           </h2>
-          <p className="text-white/60 text-sm md:text-base mt-2">
-            Find your perfect phone case
+          <p className="text-white/50 text-sm md:text-base mt-2">
+            Premium protection, finished your way.
           </p>
+          </div>
+          <Link to="/shop" className="hidden sm:inline-flex text-sm text-white/65 hover:text-brand-light transition-colors">
+            View all cases
+          </Link>
         </div>
 
-        <div className="relative group">
+        <div className="relative group rounded-3xl border border-brand/10 bg-[#111511] px-2 sm:px-5 py-4 sm:py-6">
           {showLeft && (
             <button
               onClick={() => scrollByAmount(-300)}
@@ -113,7 +119,7 @@ export default function ShopByCategory() {
             onPointerLeave={handlePointerLeave}
             onPointerUp={handlePointerUp}
             onPointerMove={handlePointerMove}
-            className="flex gap-4 sm:gap-6 overflow-x-auto snap-x snap-mandatory no-scrollbar py-4 px-2"
+            className="flex gap-3 sm:gap-5 overflow-x-auto snap-x snap-mandatory no-scrollbar py-2 px-1"
             style={{ 
               scrollbarWidth: 'none', 
               msOverflowStyle: 'none', 
@@ -126,19 +132,19 @@ export default function ShopByCategory() {
                 key={cat.id}
                 to={`/shop?case_type=${encodeURIComponent(cat.slug)}`}
                 draggable={false}
-                className="snap-start shrink-0 flex flex-col items-center gap-3 w-[80px] sm:w-[100px] md:w-[120px] group/card"
+                className="snap-start shrink-0 flex flex-col items-center gap-3 w-[100px] sm:w-[120px] md:w-[132px] group/card"
               >
-                <div className="w-[70px] h-[70px] sm:w-[90px] sm:h-[90px] md:w-[110px] md:h-[110px] bg-white rounded-2xl md:rounded-[28px] shadow-sm flex items-center justify-center p-3 transition-all duration-300 group-hover/card:scale-105 group-hover/card:shadow-xl pointer-events-none">
+                <div className="w-[92px] h-[92px] sm:w-[112px] sm:h-[112px] md:w-[124px] md:h-[124px] bg-[#f4f6f2] rounded-2xl shadow-sm flex items-center justify-center p-3 transition-all duration-500 ease-out group-hover/card:-translate-y-1 group-hover/card:shadow-[0_18px_35px_rgba(0,0,0,.3)] pointer-events-none overflow-hidden">
                   {cat.image && (
                     <img
                       src={resolveMediaUrl(cat.image)}
                       alt={cat.name}
-                      className="w-full h-full object-contain drop-shadow-md"
+                      className="w-full h-full object-contain drop-shadow-md transition-transform duration-500 group-hover/card:scale-105"
                       draggable={false}
                     />
                   )}
                 </div>
-                <span className="text-xs sm:text-sm font-medium text-white/90 text-center pointer-events-none">
+                <span className="text-xs sm:text-sm font-medium text-white/85 text-center pointer-events-none">
                   {cat.name}
                 </span>
               </Link>

@@ -72,22 +72,25 @@ export default function TemplateDetail() {
   };
 
   const handleAddToCart = async () => {
-    if (!template || !brandId || !modelId) return;
+    if (!template || !brandId || !modelId) {
+      setError("Please select your brand and model");
+      return;
+    }
     try {
-      const [brandsRes, modelsRes, productsRes] = await Promise.all([
-        api.get("/brands"),
-        api.get("/models", { params: { brand_id: brandId } }),
-        api.get("/products", { params: { brand_id: brandId, model_id: modelId } }),
-      ]);
-      const brand = brandsRes.data.find((b) => b.id === brandId);
-      const model = modelsRes.data.find((m) => m.id === modelId);
-      const product = productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
-      if (!brand || !model || !product) throw new Error("Catalog missing");
+      const brand = brands.find((b) => b.id === brandId);
+      const model = models.find((m) => m.id === modelId);
+      if (!brand || !model) throw new Error("Device selection missing");
+
+      const productsRes = await api.get("/products", {
+        params: { brand_id: brandId, model_id: modelId },
+      });
+      const product =
+        productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
+      if (!product) throw new Error("Case type unavailable for this device");
 
       const designUrl = template.thumbnail || template.images?.[0];
       const price = template.effective_price ?? template.sale_price ?? template.price;
 
-      // Add to context cart
       addToCart({
         template_product: template,
         template_product_id: template.id,
@@ -98,34 +101,43 @@ export default function TemplateDetail() {
         preview_url: designUrl,
         quantity: 1,
       });
-      toast.success("Item added to cart");
+      toast.success(`Added for ${brand.name} ${model.name}`);
     } catch {
-      setError("Could not add to cart. Please select a phone model.");
+      setError("Could not add to cart. Please select a phone model available for this case.");
     }
   };
 
   const handlePurchase = async () => {
-    if (!template || !brandId || !modelId) return;
+    if (!template || !brandId || !modelId) {
+      setError("Please select your brand and model");
+      return;
+    }
     setBuying(true);
+    setError("");
     try {
-      const [brandsRes, modelsRes, productsRes] = await Promise.all([
-        api.get("/brands"),
-        api.get("/models", { params: { brand_id: brandId } }),
-        api.get("/products", { params: { brand_id: brandId, model_id: modelId } }),
-      ]);
-      const brand = brandsRes.data.find((b) => b.id === brandId);
-      const model = modelsRes.data.find((m) => m.id === modelId);
-      const product = productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
-      if (!brand || !model || !product) throw new Error("Catalog missing");
+      // Use the dropdown selection from this page (not template defaults)
+      const brand = brands.find((b) => b.id === brandId);
+      const model = models.find((m) => m.id === modelId);
+      if (!brand || !model) throw new Error("Device selection missing");
+
+      const productsRes = await api.get("/products", {
+        params: { brand_id: brandId, model_id: modelId },
+      });
+      const product =
+        productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
+      if (!product) {
+        throw new Error("This case type is not available for the selected device");
+      }
 
       startTemplateCheckout({ template, brand, model, product, quantity: 1 });
+      toast.success(`Checkout for ${brand.name} · ${model.name}`);
       if (!user) {
         navigate("/login?next=/checkout");
         return;
       }
       navigate("/checkout");
-    } catch {
-      setError("Could not start checkout. Please select a phone model.");
+    } catch (err) {
+      setError(err.message || "Could not start checkout. Please select a phone model.");
     } finally {
       setBuying(false);
     }
@@ -161,17 +173,33 @@ export default function TemplateDetail() {
   const { colors: colorTags } = partitionTags(template.tags);
 
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-10 py-10" data-testid="template-detail">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-8 sm:py-10" data-testid="template-detail">
       <Link
         to="/shop"
-        className="inline-flex items-center gap-2 text-sm text-white/50 hover:text-white mb-8"
+        className="inline-flex items-center gap-2 text-sm text-white/50 hover:text-brand mb-7"
       >
         <ArrowLeft className="w-4 h-4" /> Back to shop
       </Link>
 
-      <div className="grid lg:grid-cols-2 gap-10 lg:gap-16">
-        <div className="space-y-4">
-          <div className="product-card-media glass rounded-2xl group">
+      <div className="grid lg:grid-cols-[1.08fr_.92fr] gap-9 lg:gap-14 xl:gap-20">
+        <div className="flex flex-col-reverse lg:flex-row gap-3 lg:gap-4 min-w-0">
+          {images.length > 1 && (
+            <div className="flex lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto no-scrollbar lg:w-[76px] shrink-0">
+              {images.map((img, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setGalleryIdx(i)}
+                  className={`w-[68px] h-[76px] lg:w-[76px] lg:h-[88px] rounded-xl overflow-hidden shrink-0 border-2 bg-[#f4f5f2] transition-colors ${
+                    i === galleryIdx ? "border-brand" : "border-transparent hover:border-black/15"
+                  }`}
+                >
+                  <img src={resolveMediaUrl(img)} alt="" className="w-full h-full object-contain p-1.5" />
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="product-detail-media product-card-media glass rounded-2xl group flex-1">
             <img
               src={currentImg}
               alt={template.title}
@@ -204,25 +232,9 @@ export default function TemplateDetail() {
               </>
             )}
           </div>
-          {images.length > 1 && (
-            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-              {images.map((img, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setGalleryIdx(i)}
-                  className={`w-16 h-16 rounded-lg overflow-hidden shrink-0 border-2 ${
-                    i === galleryIdx ? "border-brand" : "border-transparent"
-                  }`}
-                >
-                  <img src={resolveMediaUrl(img)} alt="" className="w-full h-full object-contain bg-[#0a0a0c] p-1" />
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 lg:sticky lg:top-32 lg:self-start">
           {template.collection && (
             <span className="label-eyebrow text-brand">{template.collection}</span>
           )}
@@ -330,9 +342,18 @@ export default function TemplateDetail() {
                 />
               </div>
             </div>
+            {brandId && modelId && (
+              <p className="text-xs text-white/50" data-testid="device-selection-summary">
+                Will order for{" "}
+                <span className="text-white/80">
+                  {brands.find((b) => b.id === brandId)?.name || "—"} ·{" "}
+                  {models.find((m) => m.id === modelId)?.name || "—"}
+                </span>
+              </p>
+            )}
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          <div className="btn-row pt-2">
             <button
               data-testid="add-to-cart-btn"
               onClick={(e) => {
@@ -340,19 +361,19 @@ export default function TemplateDetail() {
                 handleAddToCart();
               }}
               disabled={buying || !modelId || template.stock <= 0}
-              className="btn-secondary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+              className="btn-secondary disabled:opacity-50"
             >
-              <ShoppingBag className="w-4 h-4" />
+              <ShoppingBag aria-hidden />
               {template.stock <= 0 ? "Out of stock" : "Add to Cart"}
             </button>
             <button
               type="button"
               onClick={handlePurchase}
               disabled={buying || !modelId || template.stock <= 0}
-              className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+              className="btn-primary disabled:opacity-50"
               data-testid="buy-now"
             >
-              <Zap className="w-4 h-4" />
+              <Zap aria-hidden />
               {buying ? "Processing…" : "Buy Now"}
             </button>
           </div>

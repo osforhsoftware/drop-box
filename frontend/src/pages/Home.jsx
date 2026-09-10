@@ -18,8 +18,6 @@ import ShopByCategory from "../components/ShopByCategory";
 import OfferPopup from "../components/OfferPopup";
 import FeaturedTemplatesSlider from "../components/FeaturedTemplatesSlider";
 import CustomerGalleryStrip from "../components/gallery/CustomerGalleryStrip";
-import CollectionCard from "../components/CollectionCard";
-import { TEMPLATE_COLLECTIONS } from "../constants/templateProducts";
 import { BrandLogoMarquee } from "../components/BrandLogos";
 
 const STEPS = [
@@ -224,9 +222,70 @@ function ProcessTimeline() {
 const FAQ = [
   { q: "Can I buy a pre-designed case without uploading art?", a: "Yes — browse our Shop for ready-made templates. Pick your phone model and checkout in minutes." },
   { q: "How long does shipping take?", a: "Most orders ship within 24–48 hours and arrive in 3–5 business days across India. Flat ₹80 shipping on all orders." },
-  { q: "What phones do you support?", a: "Apple, Samsung, Xiaomi, OnePlus, Vivo, Oppo, Google Pixel, Motorola, Nokia, Sony, Huawei, Honor, ASUS, Lenovo, Realme, Nothing, iQOO, and more flagship models." },
+  { q: "What phones do you support?", a: "Apple, Akkukkaa, Samsung, Xiaomi, OnePlus, Vivo, Oppo, Google Pixel, Motorola, Nokia, Sony, Huawei, Honor, ASUS, Lenovo, Realme, Nothing, iQOO, and more flagship models." },
   { q: "Can I still design my own case?", a: "Absolutely. The custom designer works alongside our template shop — use whichever fits your style." },
 ];
+
+const STUDIO_PROMO = {
+  image: "/images/promo-custom-studio-right.png",
+  alt: "Custom colorful abstract art phone case in a dark studio",
+  number: "01",
+  tag: "Custom studio",
+  eyebrow: "Make it personal",
+  title: "Designed by you.",
+  copy: "Upload a memory, artwork, or idea and make it yours in minutes.",
+  meta: "Upload · Preview · Order",
+  label: "Start designing",
+  to: "/customize",
+};
+
+const CURATED_PROMO = {
+  image: "/images/promo-curated-right.png",
+  alt: "Premium artist mountain landscape phone case",
+  number: "02",
+  tag: "Artist collection",
+  eyebrow: "Ready to ship",
+  title: "Curated to stand out.",
+  copy: "Explore artist-made cases created for everyday protection.",
+  meta: "Fresh designs · Premium finish",
+  label: "Shop the collection",
+  to: "/shop",
+};
+
+function HomePromoCard({ item, className = "" }) {
+  return (
+    <motion.article
+      initial={{ opacity: 0, y: 20 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 0.25 }}
+      transition={{ duration: 0.6 }}
+      className={`home-promo-card group ${className}`.trim()}
+    >
+      <img
+        src={item.image}
+        alt={item.alt}
+        className="home-promo-card__image"
+        loading="lazy"
+      />
+      <div className="home-promo-card__shade" aria-hidden="true" />
+      <div className="home-promo-card__topline">
+        <span>{item.number}</span>
+        <span className="home-promo-card__tag">{item.tag}</span>
+      </div>
+      <div className="home-promo-card__content">
+        <div className="label-eyebrow mb-3">{item.eyebrow}</div>
+        <h2 className="font-display text-3xl sm:text-4xl font-semibold">{item.title}</h2>
+        <p className="mt-3 max-w-md text-sm sm:text-base text-white/65">{item.copy}</p>
+        <div className="home-promo-card__footer">
+          <span>{item.meta}</span>
+          <Link to={item.to} className="home-promo-card__cta">
+            {item.label} <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      </div>
+    </motion.article>
+  );
+}
 
 export default function Home() {
   const [openFaq, setOpenFaq] = useState(null);
@@ -240,16 +299,19 @@ export default function Home() {
 
       <BrandLogoMarquee />
 
-      <FeaturedTemplatesSlider />
-
-      {/* Collections */}
-      <section id="collections" className="max-w-7xl mx-auto px-6 lg:px-10 py-24">
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {TEMPLATE_COLLECTIONS.map((col) => (
-            <CollectionCard key={col} collection={col} />
-          ))}
-        </div>
+      <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
+        <HomePromoCard item={STUDIO_PROMO} />
       </section>
+
+      <FeaturedTemplatesSlider
+        afterSection={{
+          customized: (
+            <div className="max-w-5xl mx-auto pt-1">
+              <HomePromoCard item={CURATED_PROMO} />
+            </div>
+          ),
+        }}
+      />
 
       {/* About */}
       <section id="about-us" className="max-w-7xl mx-auto px-6 lg:px-10 py-16">
@@ -273,7 +335,7 @@ export default function Home() {
           <div className="w-full flex justify-center lg:justify-end">
             <img
               src="/images/phone_brands_casebox.webp"
-              alt="Supported phone brands including Apple, Samsung, Xiaomi, and more"
+              alt="Supported phone brands including Apple, Akkukkaa, Samsung, Xiaomi, and more"
               className="w-full max-w-sm sm:max-w-md lg:max-w-full h-auto object-contain"
               loading="lazy"
               decoding="async"
@@ -285,7 +347,7 @@ export default function Home() {
       {/* How it works — vertical timeline */}
       <section
         id="how-it-works"
-        className="max-w-7xl mx-auto px-6 lg:px-10 py-24"
+        className="process-section max-w-7xl mx-auto px-6 lg:px-10 py-24 rounded-[2rem]"
       >
         <div className="label-eyebrow">The Process</div>
         <h2 className="font-display text-4xl lg:text-5xl mt-3 mb-14 lg:mb-16">
@@ -297,24 +359,30 @@ export default function Home() {
       <CustomerGalleryStrip />
 
       {/* FAQ */}
-      <section id="faq" className="max-w-3xl mx-auto px-6 lg:px-10 py-24">
-        <div className="label-eyebrow text-center">FAQ</div>
-        <h2 className="font-display text-4xl lg:text-5xl mt-3 mb-12 text-center">
-          Questions? Answered.
-        </h2>
-        <div className="space-y-3">
+      <section id="faq" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-20 sm:py-28 grid lg:grid-cols-[0.75fr_1.25fr] gap-10 lg:gap-20">
+        <div>
+          <div className="label-eyebrow">Need help?</div>
+          <h2 className="font-display text-4xl lg:text-5xl mt-3">
+            Frequently asked questions.
+          </h2>
+          <p className="mt-4 max-w-sm text-white/50 leading-relaxed">
+            Everything you need to know before creating your case.
+          </p>
+          <Link to="/contact" className="btn-secondary inline-flex mt-7 text-sm">Contact us</Link>
+        </div>
+        <div className="divide-y divide-white/[0.08] border-y border-white/[0.08]">
           {FAQ.map((item, i) => (
-            <div key={i} className="glass rounded-xl overflow-hidden" data-testid={`faq-${i}`}>
+            <div key={i} data-testid={`faq-${i}`}>
               <button
                 type="button"
                 onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                className="w-full flex items-center justify-between p-5 text-left hover:bg-white/[0.02] transition-colors"
+                className="w-full flex items-center justify-between py-5 text-left hover:text-brand-light transition-colors"
               >
                 <span className="font-medium pr-4">{item.q}</span>
                 <ChevronDown className={`w-5 h-5 flex-shrink-0 text-white/40 transition-transform ${openFaq === i ? "rotate-180" : ""}`} />
               </button>
               {openFaq === i && (
-                <div className="px-5 pb-5 text-sm text-white/60 leading-relaxed border-t border-white/[0.06] pt-4">
+                <div className="pb-5 pr-10 text-sm text-white/55 leading-relaxed">
                   {item.a}
                 </div>
               )}

@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { resolveMediaUrl } from "../lib/api";
+import { DEMO_PHONE_CASE_OVERLAY } from "../lib/caseTemplate/demoTemplate";
 
 /** Default phone mockup shown when a model has no uploaded image. */
 export const DEFAULT_MODEL_MOCKUP = "/images/default-phone-mockup.svg";
+
+export { DEMO_PHONE_CASE_OVERLAY };
 
 const CASE_TINTS = {
   silicone: "from-brand/20 to-zinc-900",
@@ -40,7 +43,6 @@ function ModelFallback({ className = "" }) {
 }
 
 function ProductFallback({ name, slug, className = "" }) {
-  const letter = (name || "?").trim().charAt(0).toUpperCase() || "?";
   const tint = CASE_TINTS[slug] || "from-zinc-800 to-zinc-950";
   return (
     <div
@@ -48,7 +50,12 @@ function ProductFallback({ name, slug, className = "" }) {
       aria-hidden
       title={name || "Case type"}
     >
-      <span className="font-display font-semibold text-brand leading-none text-[clamp(0.65rem,40%,2rem)]">{letter}</span>
+      <img
+        src={DEMO_PHONE_CASE_OVERLAY}
+        alt=""
+        className="h-[88%] w-auto max-w-[70%] object-contain drop-shadow-md"
+        draggable={false}
+      />
     </div>
   );
 }

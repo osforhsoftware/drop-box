@@ -714,12 +714,23 @@ export default function AdminTemplateProducts() {
 
             <fieldset className="space-y-4">
               <legend className="label-eyebrow mb-2">Basic Information</legend>
-              <input required placeholder="Product name *" value={form.title} onChange={(e) => set("title", e.target.value)} className="form-field" />
-              <input placeholder="Slug (auto-generated if empty)" value={form.slug} onChange={(e) => set("slug", e.target.value)} className="form-field" />
-              <textarea placeholder="Description" value={form.description} onChange={(e) => set("description", e.target.value)} rows={3} className="form-field" />
-              <input placeholder="Short description" value={form.short_description} onChange={(e) => set("short_description", e.target.value)} className="form-field" />
-              <div>
-                <label className="text-xs text-white/50 block mb-1">Phone case type *</label>
+              <Field label="Product name" required>
+                <input required placeholder="e.g. Midnight Matte Case" value={form.title} onChange={(e) => set("title", e.target.value)} className="form-field" />
+              </Field>
+              <Field label="Slug" hint="Leave empty to auto-generate from the product name.">
+                <input placeholder="auto-generated if empty" value={form.slug} onChange={(e) => set("slug", e.target.value)} className="form-field" />
+              </Field>
+              <Field label="Description">
+                <textarea placeholder="Full product description" value={form.description} onChange={(e) => set("description", e.target.value)} rows={3} className="form-field" />
+              </Field>
+              <Field label="Short description">
+                <input placeholder="Shown on cards and listings" value={form.short_description} onChange={(e) => set("short_description", e.target.value)} className="form-field" />
+              </Field>
+              <Field
+                label="Phone case type"
+                required
+                hint="Customized cases show in the first shop row; original blank cases show in the second row and home slider."
+              >
                 <select
                   value={form.product_type}
                   onChange={(e) => set("product_type", e.target.value)}
@@ -730,17 +741,18 @@ export default function AdminTemplateProducts() {
                     <option key={t.slug} value={t.slug}>{t.label}</option>
                   ))}
                 </select>
-                <p className="text-[11px] text-white/35 mt-1">
-                  Customized cases show in the first shop row; original blank cases show in the second row and home slider.
-                </p>
-              </div>
+              </Field>
               <div className="grid grid-cols-2 gap-3">
-                <select value={form.category} onChange={(e) => set("category", e.target.value)} className="form-field">
-                  {TEMPLATE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <select value={form.collection} onChange={(e) => set("collection", e.target.value)} className="form-field">
-                  {TEMPLATE_COLLECTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <Field label="Category">
+                  <select value={form.category} onChange={(e) => set("category", e.target.value)} className="form-field">
+                    {TEMPLATE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <Field label="Collection">
+                  <select value={form.collection} onChange={(e) => set("collection", e.target.value)} className="form-field">
+                    {TEMPLATE_COLLECTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
               </div>
               <LogoColorSelect
                 label="Logo & case colors"
@@ -768,9 +780,11 @@ export default function AdminTemplateProducts() {
 
             <fieldset className="space-y-4">
               <legend className="label-eyebrow mb-2">Compatibility</legend>
-              <select value={form.phone_brand} onChange={(e) => set("phone_brand", e.target.value)} className="form-field">
-                {TEMPLATE_PHONE_BRANDS.map((b) => <option key={b} value={b}>{b}</option>)}
-              </select>
+              <Field label="Phone brand">
+                <select value={form.phone_brand} onChange={(e) => set("phone_brand", e.target.value)} className="form-field">
+                  {TEMPLATE_PHONE_BRANDS.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </Field>
               <TagSelect
                 label="Phone models"
                 value={form.phone_models}
@@ -780,24 +794,28 @@ export default function AdminTemplateProducts() {
                 testId="phone-case-models"
               />
               <div className="grid grid-cols-2 gap-3">
-                <select
-                  required
-                  value={form.case_type}
-                  onChange={(e) => set("case_type", e.target.value)}
-                  className="form-field"
-                  data-testid="case-type-select"
-                >
-                  <option value="" disabled>
-                    {caseTypes.length ? "Case type" : "No case types yet"}
-                  </option>
-                  {caseTypes.map((c) => (
-                    <option key={c.id || c.slug} value={c.slug}>{c.name}</option>
-                  ))}
-                  {form.case_type && !caseTypes.some((c) => c.slug === form.case_type) && (
-                    <option value={form.case_type}>{form.case_type}</option>
-                  )}
-                </select>
-                <input placeholder="Material" value={form.material} onChange={(e) => set("material", e.target.value)} className="form-field" />
+                <Field label="Case type" required>
+                  <select
+                    required
+                    value={form.case_type}
+                    onChange={(e) => set("case_type", e.target.value)}
+                    className="form-field"
+                    data-testid="case-type-select"
+                  >
+                    <option value="" disabled>
+                      {caseTypes.length ? "Select case type" : "No case types yet"}
+                    </option>
+                    {caseTypes.map((c) => (
+                      <option key={c.id || c.slug} value={c.slug}>{c.name}</option>
+                    ))}
+                    {form.case_type && !caseTypes.some((c) => c.slug === form.case_type) && (
+                      <option value={form.case_type}>{form.case_type}</option>
+                    )}
+                  </select>
+                </Field>
+                <Field label="Material">
+                  <input placeholder="e.g. TPU, PC, Leather" value={form.material} onChange={(e) => set("material", e.target.value)} className="form-field" />
+                </Field>
               </div>
               {caseTypes.length === 0 && (
                 <p className="text-[11px] text-amber-400/80">
@@ -807,12 +825,41 @@ export default function AdminTemplateProducts() {
             </fieldset>
 
             <fieldset className="space-y-4">
-              <legend className="label-eyebrow mb-2">Pricing</legend>
+              <legend className="label-eyebrow mb-2">Pricing & stock</legend>
               <div className="grid grid-cols-2 gap-3">
-                <input required type="number" placeholder="Regular price *" value={form.price} onChange={(e) => set("price", e.target.value)} className="form-field" />
-                <input type="number" placeholder="Sale price" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} className="form-field" />
-                <input type="number" placeholder="Stock" value={form.stock} onChange={(e) => set("stock", e.target.value)} className="form-field" />
-                <input placeholder="SKU" value={form.sku} onChange={(e) => set("sku", e.target.value)} className="form-field" />
+                <Field label="Regular price" required>
+                  <input required type="number" min="0" step="1" placeholder="399" value={form.price} onChange={(e) => set("price", e.target.value)} className="form-field" />
+                </Field>
+                <Field label="Sale price">
+                  <input type="number" min="0" step="1" placeholder="Optional offer price" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} className="form-field" />
+                </Field>
+                <Field label="Stock quantity" hint="Units available. Set 0 to mark as out of stock.">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="0"
+                    value={form.stock}
+                    onChange={(e) => set("stock", e.target.value)}
+                    className="form-field"
+                    data-testid="stock-quantity"
+                  />
+                </Field>
+                <Field label="SKU">
+                  <input placeholder="Stock keeping unit" value={form.sku} onChange={(e) => set("sku", e.target.value)} className="form-field" />
+                </Field>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-4">
+              <legend className="label-eyebrow mb-2">Reviews</legend>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Rating" hint="Shown on shop cards. 0 to 5.">
+                  <input type="number" min="0" max="5" step="0.1" placeholder="4.5" value={form.rating} onChange={(e) => set("rating", e.target.value)} className="form-field" />
+                </Field>
+                <Field label="Review count">
+                  <input type="number" min="0" step="1" placeholder="0" value={form.review_count} onChange={(e) => set("review_count", e.target.value)} className="form-field" />
+                </Field>
               </div>
             </fieldset>
 
@@ -905,18 +952,26 @@ export default function AdminTemplateProducts() {
                     {label}
                   </label>
                 ))}
-                <select value={form.status} onChange={(e) => set("status", e.target.value)} className="form-field w-auto">
-                  <option value="published">Published</option>
-                  <option value="draft">Draft</option>
-                </select>
+                <Field label="Status">
+                  <select value={form.status} onChange={(e) => set("status", e.target.value)} className="form-field w-auto">
+                    <option value="published">Published</option>
+                    <option value="draft">Draft</option>
+                  </select>
+                </Field>
               </div>
             </fieldset>
 
             <fieldset className="space-y-4">
               <legend className="label-eyebrow mb-2">SEO</legend>
-              <input placeholder="Meta title" value={form.meta_title} onChange={(e) => set("meta_title", e.target.value)} className="form-field" />
-              <textarea placeholder="Meta description" value={form.meta_description} onChange={(e) => set("meta_description", e.target.value)} rows={2} className="form-field" />
-              <input placeholder="Keywords" value={form.keywords} onChange={(e) => set("keywords", e.target.value)} className="form-field" />
+              <Field label="Meta title">
+                <input placeholder="Search title" value={form.meta_title} onChange={(e) => set("meta_title", e.target.value)} className="form-field" />
+              </Field>
+              <Field label="Meta description">
+                <textarea placeholder="Search description" value={form.meta_description} onChange={(e) => set("meta_description", e.target.value)} rows={2} className="form-field" />
+              </Field>
+              <Field label="Keywords">
+                <input placeholder="Comma-separated keywords" value={form.keywords} onChange={(e) => set("keywords", e.target.value)} className="form-field" />
+              </Field>
             </fieldset>
 
             <div className="flex gap-3 pt-2">
@@ -928,6 +983,18 @@ export default function AdminTemplateProducts() {
           </form>
         </div>
       )}
+    </div>
+  );
+}
+
+function Field({ label, required, hint, children }) {
+  return (
+    <div>
+      <label className="text-xs text-white/50 block mb-1">
+        {label}{required ? " *" : ""}
+      </label>
+      {children}
+      {hint ? <p className="text-[11px] text-white/35 mt-1">{hint}</p> : null}
     </div>
   );
 }

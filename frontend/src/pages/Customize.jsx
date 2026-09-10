@@ -4,7 +4,7 @@ import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { setDraft, getDraft } from "../lib/draft";
+import { setDraft, getDraft, replaceDraft } from "../lib/draft";
 import { TemplateRenderer } from "../lib/caseTemplate";
 import CatalogImage from "../components/CatalogImage";
 import {
@@ -113,28 +113,39 @@ export default function Customize() {
   return (
     <div data-testid="customize-page" className="max-w-7xl mx-auto px-6 lg:px-10 py-10">
       {/* Stepper */}
-      <div className="flex items-center justify-between mb-10">
+      <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
         <button
+          type="button"
           onClick={() => (step === 0 ? navigate("/") : prev())}
-          className="text-sm text-white/60 hover:text-white flex items-center gap-2"
+          className="inline-flex shrink-0 items-center gap-2 self-start text-sm leading-none text-white/60 hover:text-white"
           data-testid="back-btn"
         >
-          <ArrowLeft className="w-4 h-4" /> Back
+          <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
+          Back
         </button>
-        <div className="flex items-center gap-3">
-          {STEPS.map((s, i) => (
-            <div key={s} className="flex items-center gap-3">
-              <div className={`step-dot ${i <= step ? "active" : ""}`} />
-              <span
-                className={`font-mono text-xs uppercase tracking-widest ${i === step ? "text-white" : "text-white/30"}`}
-              >
-                {s}
-              </span>
-              {i < STEPS.length - 1 && <div className="w-6 h-px bg-white/10" />}
-            </div>
-          ))}
-        </div>
-        <div className="w-16" />
+        <nav aria-label="Customization steps" className="min-w-0 flex-1 overflow-x-auto no-scrollbar">
+          <ol className="flex items-center gap-2 sm:justify-center sm:gap-3">
+            {STEPS.map((s, i) => (
+              <li key={s} className="flex shrink-0 items-center gap-2 sm:gap-3">
+                <span
+                  className={`step-dot shrink-0 ${i <= step ? "active" : ""}`}
+                  aria-current={i === step ? "step" : undefined}
+                  aria-hidden={i === step ? undefined : true}
+                />
+                <span
+                  className={`whitespace-nowrap font-mono text-[10px] uppercase tracking-widest sm:text-xs ${
+                    i === step ? "text-white" : "text-white/30"
+                  }`}
+                >
+                  {s}
+                </span>
+                {i < STEPS.length - 1 && (
+                  <span className="h-px w-4 shrink-0 bg-white/10 sm:w-6" aria-hidden />
+                )}
+              </li>
+            ))}
+          </ol>
+        </nav>
       </div>
 
       {step === 0 && (
@@ -297,7 +308,7 @@ function DesignStep({ brand, model, product, onDone }) {
     const renderer = new TemplateRenderer({
       containerEl: container,
       allowOverflow: false,
-      editMode: true,
+      editMode: false, // hide print-area dashed guide on customer canvas
       maxHeight: 560,
       caseColor: initialHex,
     });
@@ -313,8 +324,9 @@ function DesignStep({ brand, model, product, onDone }) {
         });
         if (disposed) return;
         renderer.setCaseColor(getCaseColorHex(caseColorId === "custom" ? customCaseHex : caseColorId));
-        setHasTemplate(Boolean(renderer.template));
-        setTemplateId(renderer.template?.id || null);
+        setHasTemplate(Boolean(renderer.overlayUrl || renderer.template));
+        // Demo fallback has no DB id — keep null so orders don't reference a fake template.
+        setTemplateId(renderer.template?.is_demo ? null : renderer.template?.id || null);
         setInitError(null);
         if (renderer.printArea) {
           console.info("[Customize] print area", renderer.printArea);
@@ -437,7 +449,9 @@ function DesignStep({ brand, model, product, onDone }) {
       // Persist both original upload (design_url) and edited canvas preview.
       const preview_url = await uploadEditedPreview(renderer, uploadedUrl);
       const print = renderer?.getPrintPayload() || {};
-      setDraft({
+      // Replace draft so a prior shop/cart checkout cannot leak into summary
+      replaceDraft({
+        source: "custom",
         preview_url: preview_url || uploadedUrl,
         design_url: uploadedUrl,
         design_transform: print.design_transform,
@@ -484,7 +498,7 @@ function DesignStep({ brand, model, product, onDone }) {
           </div>
         </div>
 
-        <div className="lg:col-span-4 glass rounded-2xl p-6 flex flex-col gap-5">
+        <div className="lg:col-span-4 glass rounded-2xl p-4 sm:p-6 flex flex-col gap-5">
           <div>
             <div className="label-eyebrow mb-3">Upload artwork</div>
             <div
@@ -631,15 +645,15 @@ function DesignStep({ brand, model, product, onDone }) {
             </div>
           </div>
 
-          <div className="flex items-stretch gap-3">
+          <div className="btn-row">
             <button
               type="button"
               data-testid="add-to-cart-btn"
               onClick={handleAddToCart}
               disabled={!uploadedUrl || saving || uploading}
-              className="btn-secondary flex-1 inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn-secondary disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <ShoppingBag className="w-4 h-4" />
+              <ShoppingBag aria-hidden />
               {saving ? "Saving…" : "Add to Cart"}
             </button>
             <button
@@ -647,9 +661,10 @@ function DesignStep({ brand, model, product, onDone }) {
               data-testid="continue-checkout"
               onClick={handleContinue}
               disabled={!uploadedUrl || saving || uploading}
-              className="btn-primary flex-1 inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {saving ? "Saving…" : "Buy Now"} <ArrowRight className="w-4 h-4" />
+              {saving ? "Saving…" : "Buy Now"}
+              <ArrowRight aria-hidden />
             </button>
           </div>
         </div>

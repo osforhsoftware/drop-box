@@ -46,8 +46,8 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   };
 
-  const register = async (name, email, password, phone, security = {}) => {
-    const { data } = await api.post("/auth/register", { name, email, password, phone, ...security });
+  const completeGoogleLogin = async (code) => {
+    const { data } = await api.post("/auth/google/exchange", { code });
     if (data.access_token) localStorage.setItem("form_token", data.access_token);
     setUser(data.user);
     return data.user;
@@ -59,14 +59,15 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
-  const logout = async () => {
+  const logout = async ({ redirectTo } = {}) => {
     await api.post("/auth/logout").catch(() => {});
     localStorage.removeItem("form_token");
     setUser(null);
+    if (redirectTo) window.location.replace(redirectTo);
   };
 
   return (
-    <AuthCtx.Provider value={{ user, loading, login, register, updateProfile, logout, refreshUser }}>
+    <AuthCtx.Provider value={{ user, loading, login, completeGoogleLogin, updateProfile, logout, refreshUser }}>
       {children}
     </AuthCtx.Provider>
   );

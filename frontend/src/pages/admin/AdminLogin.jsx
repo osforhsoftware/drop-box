@@ -5,7 +5,7 @@ import { buildAuthSecurityPayload, honeypotFieldProps, HONEYPOT_CLASS } from "..
 import SiteLogo from "../../components/SiteLogo";
 
 export default function AdminLogin() {
-  const { user, login } = useAuth();
+  const { user, login, logout } = useAuth();
   const navigate = useNavigate();
   const formLoadedAt = useRef(Date.now());
   const [email, setEmail] = useState("");
@@ -21,11 +21,16 @@ export default function AdminLogin() {
     setErr("");
     setBusy(true);
     try {
-      await login(
+      const signedIn = await login(
         email,
         password,
         buildAuthSecurityPayload(formLoadedAt.current, honeypot)
       );
+      if (signedIn?.role !== "admin") {
+        await logout();
+        setErr("Admin accounts must sign in here. Customers use Google on the shop login page.");
+        return;
+      }
       navigate("/admin");
     } catch (e) {
       setErr(e.response?.data?.detail || "Login failed");

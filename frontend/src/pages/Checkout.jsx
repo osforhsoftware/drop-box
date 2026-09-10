@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { api, resolveMediaUrl } from "../lib/api";
 
-import { getDraft, setDraft } from "../lib/draft";
+import { getDraft, setDraft, replaceDraft } from "../lib/draft";
 
 import { useAuth } from "../lib/auth";
 
@@ -192,7 +192,13 @@ export default function Checkout() {
 
 
 
-  const isCart = draft.source === "cart" && draft.items && draft.items.length > 0;
+  // Shop Buy Now uses source "template_product" with items; cart uses "cart".
+  // Both must use items[] — never fall back to a stale top-level customize draft.
+  const useItems =
+    Array.isArray(draft.items) &&
+    draft.items.length > 0 &&
+    (draft.source === "cart" || draft.source === "template_product");
+  const isCart = useItems;
 
   const unitPrice = isCart
     ? draft.items.reduce((acc, i) => acc + (i.product.price * i.quantity), 0)
@@ -229,6 +235,13 @@ export default function Checkout() {
     setSubmitting(true);
 
     try {
+      const session = await refreshUser();
+      if (!session || session.role !== "customer") {
+        toast.error("Please sign in with Google to place this order.");
+        navigate(`/login?next=${encodeURIComponent("/checkout")}`);
+        return;
+      }
+
       const payload = {
         customer_name: form.customer_name,
         phone: form.phone,
@@ -306,7 +319,7 @@ export default function Checkout() {
       const { data } = await api.post("/orders", payload);
 
       await refreshUser();
-      setDraft({ order: data });
+      replaceDraft({ order: data, source: draft.source || "order" });
       navigate(`/payment/${data.order_id}`);
     } catch (e) {
       toast.error(e.response?.data?.detail || "Order creation failed");
@@ -387,7 +400,10 @@ export default function Checkout() {
                   )}
                   <div className="flex-1 text-sm">
                     <div className="font-medium">{item.template_product?.title || item.product.name}</div>
-                    <div className="text-white/50 mt-1">{item.brand.name} · {item.model.name}</div>
+                    <div className="text-white/50 mt-1">
+                      <span className="text-white/40">Device · </span>
+                      {item.brand?.name} · {item.model?.name}
+                    </div>
                     <div className="text-white/40 mt-0.5">Qty: {item.quantity}</div>
                     <div className="mt-2 font-mono text-brand">₹{item.product.price * item.quantity}</div>
                   </div>
