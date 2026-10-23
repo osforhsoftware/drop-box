@@ -14,12 +14,18 @@ const PRINT_DPI = 300;
 const SCREEN_DPI = 96;
 
 function urlToLocalPath(urlOrPath, uploadDir) {
-  if (!urlOrPath) return null;
+  if (!urlOrPath || !uploadDir) return null;
   const s = String(urlOrPath);
+  if (s.includes("\0") || s.includes("..")) return null;
   const marker = "/api/uploads/";
   const idx = s.indexOf(marker);
-  const rel = idx >= 0 ? s.slice(idx + marker.length) : s.replace(/^\/+/, "");
-  const full = path.join(uploadDir, rel);
+  let rel = idx >= 0 ? s.slice(idx + marker.length) : s.replace(/^\/+/, "").replace(/^uploads\//, "");
+  rel = rel.split("?")[0].split("#")[0];
+  if (!rel || rel.includes("..") || rel.includes("\\") || path.isAbsolute(rel)) return null;
+  const root = path.resolve(uploadDir);
+  const full = path.resolve(root, rel);
+  const relative = path.relative(root, full);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return fs.existsSync(full) ? full : null;
 }
 

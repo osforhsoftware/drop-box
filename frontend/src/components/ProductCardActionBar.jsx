@@ -49,6 +49,7 @@ export default function ProductCardActionBar({
   wishlisted = false,
   wishPop = false,
   cartState = "idle",
+  cartDisabled = false,
   productSlug,
 }) {
   const stop = (e) => {
@@ -92,13 +93,15 @@ export default function ProductCardActionBar({
         )}
         {onAddToCart && (
           <ActionButton
-            label="Add to cart"
+            label={cartDisabled ? "Out of stock" : "Add to cart"}
             icon={ShoppingBag}
             activeIcon={Check}
             variant="cart"
             state={cartState}
+            disabled={cartDisabled}
             onClick={(e) => {
               stop(e);
+              if (cartDisabled) return;
               onAddToCart();
             }}
             testId={productSlug ? `add-to-cart-${productSlug}` : undefined}

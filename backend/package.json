@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test \"lib/*.test.js\"",
+    "test": "node --test \"lib/*.test.js\" \"services/*.test.js\"",
     "seed:demo": "node scripts/seed-demo-catalog.js",
     "seed:gallery": "node scripts/seed-demo-gallery.js",
     "generate:demo-images": "node scripts/generate-demo-images.js"

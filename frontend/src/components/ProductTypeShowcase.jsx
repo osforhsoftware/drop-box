@@ -19,8 +19,9 @@ import TemplateProductCard from "./TemplateProductCard";
 function uniqueTemplates(items) {
   const seen = new Set();
   return items.filter((item) => {
-    if (!item?.id || seen.has(item.id)) return false;
-    seen.add(item.id);
+    const key = item?.design_id || item?.id;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

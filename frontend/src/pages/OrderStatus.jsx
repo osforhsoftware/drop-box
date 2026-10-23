@@ -13,6 +13,10 @@ const STATUS_STEPS = [
   { key: "delivered", label: "Delivered", icon: Check },
 ];
 
+function materialName(item) {
+  return item?.case_type_label || item?.material || item?.product_name || "";
+}
+
 function progressSteps(order) {
   const razorpay = order?.payment_method === "razorpay" || Boolean(order?.razorpay_payment_id);
   return STATUS_STEPS.map((step) => (
@@ -78,7 +82,7 @@ export default function OrderStatus() {
                 <div className="text-white/60 mt-2 text-sm" data-testid="order-selected-device">
                   <span className="text-white/40">Device · </span>
                   {order.brand_name} · {order.model_name}
-                  {order.product_name ? ` · ${order.product_name}` : ""}
+                  {materialName(order) ? ` · ${materialName(order)}` : ""}
                 </div>
               </div>
               {!order.items && order.preview_url && (
@@ -134,7 +138,7 @@ export default function OrderStatus() {
               <div className="space-y-2 text-sm text-white/70">
                 <DetailRow label="Brand" value={order.brand_name || "—"} />
                 <DetailRow label="Model" value={order.model_name || "—"} />
-                <DetailRow label="Case type" value={order.product_name || "—"} />
+                <DetailRow label="Material" value={materialName(order) || "—"} />
               </div>
             </div>
 
@@ -160,8 +164,11 @@ export default function OrderStatus() {
                         <div className="w-16 h-24 bg-zinc-900 rounded-lg shrink-0" />
                       )}
                       <div className="flex-1 text-sm">
-                        <div className="font-medium text-white/90">{item.product_name}</div>
-                        <div className="text-white/60 mt-1">{item.brand_name} · {item.model_name}</div>
+                        <div className="font-medium text-white/90">{item.template_product_title || item.product_name}</div>
+                        <div className="text-white/60 mt-1">
+                          {materialName(item) ? `${materialName(item)} · ` : ""}
+                          {item.brand_name} · {item.model_name}
+                        </div>
                         <div className="flex items-center justify-between mt-2">
                           <span className="text-white/40">Qty: {item.quantity}</span>
                           <span className="font-mono text-brand">₹{item.price * item.quantity}</span>

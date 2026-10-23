@@ -11,7 +11,7 @@ import { getDraft, setDraft, replaceDraft } from "../lib/draft";
 import { useAuth } from "../lib/auth";
 
 import { SHIPPING_FEE } from "../constants/shipping";
-import { formatPrice } from "../constants/templateProducts";
+import { formatPrice, materialLabel } from "../constants/templateProducts";
 import { INDIAN_PHONE_LEN, PHONE_HINT, sanitizePhoneInput } from "../lib/phone";
 import {
   collectErrors,
@@ -277,16 +277,24 @@ export default function Checkout() {
           design_transform: firstItem.design_transform || null,
           template_id: firstItem.template_id || null,
           template_product_id: firstItem.template_product_id || null,
+          template_product_title: firstItem.template_product?.title || null,
           case_color: firstItem.case_color || null,
+          case_type: firstItem.template_product?.case_type || firstItem.product?.slug || null,
+          case_type_label: firstItem.template_product?.case_type_label || materialLabel(firstItem) || firstItem.product?.name || null,
+          material: firstItem.template_product?.material || null,
 
           items: draft.items.map(i => ({
             template_product_id: i.template_product_id || null,
+            template_product_title: i.template_product?.title || null,
             brand_id: i.brand.id,
             brand_name: i.brand.name,
             model_id: i.model.id,
             model_name: i.model.name,
             product_id: i.product.id,
             product_name: i.product.name,
+            case_type: i.template_product?.case_type || i.product?.slug || null,
+            case_type_label: i.template_product?.case_type_label || materialLabel(i) || i.product?.name || null,
+            material: i.template_product?.material || null,
             design_url: i.design_url,
             preview_url: i.preview_url || i.design_url,
             quantity: i.quantity || 1,
@@ -310,7 +318,11 @@ export default function Checkout() {
           design_transform: draft.design_transform || null,
           template_id: draft.template_id || null,
           template_product_id: draft.template_product_id || null,
+          template_product_title: draft.template_product?.title || null,
           case_color: draft.case_color || null,
+          case_type: draft.template_product?.case_type || draft.product?.slug || null,
+          case_type_label: draft.template_product?.case_type_label || materialLabel(draft) || draft.product?.name || null,
+          material: draft.template_product?.material || null,
         });
       }
 
@@ -401,7 +413,7 @@ export default function Checkout() {
                   <div className="flex-1 text-sm">
                     <div className="font-medium">{item.template_product?.title || item.product.name}</div>
                     <div className="text-white/50 mt-1">
-                      <span className="text-white/40">Device · </span>
+                      {materialLabel(item) ? `${materialLabel(item)} · ` : ""}
                       {item.brand?.name} · {item.model?.name}
                     </div>
                     <div className="text-white/40 mt-0.5">Qty: {item.quantity}</div>
@@ -418,7 +430,10 @@ export default function Checkout() {
                 )}
                 <div className="flex-1 text-sm">
                   <div className="font-medium">{draft.template_product?.title || draft.product?.name}</div>
-                  <div className="text-white/50 mt-1">{draft.brand?.name} · {draft.model?.name}</div>
+                  <div className="text-white/50 mt-1">
+                    {materialLabel(draft) ? `${materialLabel(draft)} · ` : ""}
+                    {draft.brand?.name} · {draft.model?.name}
+                  </div>
                   <div className="mt-3 font-mono text-brand">₹{unitPrice}</div>
                 </div>
               </div>

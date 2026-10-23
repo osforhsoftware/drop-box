@@ -3,7 +3,7 @@ import { resolveMediaUrl } from "../../../lib/api";
 import { SHIPPING_FEE } from "../../../constants/shipping";
 import { COMPANY_NAME } from "../../../constants/company";
 import { PAYMENT_EDIT_OPTIONS, DELIVERY_EDIT_OPTIONS } from "./orderConstants";
-import { isRazorpayOrder, isFailedPaymentOrder, prettify, fmtDate, toneClass, recordKindLabel } from "./orderHelpers";
+import { isRazorpayOrder, isFailedPaymentOrder, prettify, fmtDate, toneClass, recordKindLabel, orderMaterialLabel, orderMaterialFinish } from "./orderHelpers";
 
 export default function OrderDetailsModal({
   selected,
@@ -128,7 +128,9 @@ export default function OrderDetailsModal({
                         <div key={idx} className="border-b border-white/10 pb-4 last:border-0 last:pb-0">
                           <Info l="Brand" v={item.brand_name} />
                           <Info l="Model" v={item.model_name} />
-                          <Info l="Product" v={item.product_name} />
+                          {item.template_product_title ? <Info l="Design" v={item.template_product_title} /> : null}
+                          <Info l="Material" v={orderMaterialLabel(item) || "—"} />
+                          {orderMaterialFinish(item) ? <Info l="Finish" v={orderMaterialFinish(item)} /> : null}
                           <Info l="Quantity" v={item.quantity} />
                           <Info l="Price" v={`₹${item.price}`} />
                           <ItemFiles item={item} idx={idx} />
@@ -141,7 +143,9 @@ export default function OrderDetailsModal({
                     <Section title="Product information">
                       <Info l="Brand" v={selected.brand_name} />
                       <Info l="Model" v={selected.model_name} />
-                      <Info l="Case type" v={selected.product_name} />
+                      {selected.template_product_title ? <Info l="Design" v={selected.template_product_title} /> : null}
+                      <Info l="Material" v={orderMaterialLabel(selected) || "—"} />
+                      {orderMaterialFinish(selected) ? <Info l="Finish" v={orderMaterialFinish(selected)} /> : null}
                       <Info l="Quantity" v="1" />
                       <Info l="Price" v={`₹${selected.subtotal ?? selected.amount}`} />
                     </Section>

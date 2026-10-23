@@ -185,7 +185,10 @@ export default function Profile() {
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="font-mono text-xs text-brand">{o.order_id}</div>
-                          <div className="text-sm truncate mt-0.5">{o.product_name}</div>
+                          <div className="text-sm truncate mt-0.5">
+                            {o.template_product_title || o.product_name}
+                            {o.case_type_label || o.material ? ` · ${o.case_type_label || o.material}` : ""}
+                          </div>
                           <div className="text-xs text-white/50 mt-1 capitalize">
                             {o.delivery_status?.replace(/_/g, " ")}
                           </div>

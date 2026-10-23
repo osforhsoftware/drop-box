@@ -77,6 +77,42 @@ describe("razorpayPayments", () => {
     });
     assert.equal(stripped.razorpay_signature, undefined);
     assert.equal(stripped.razorpay_payment_id, "pay_1");
+
+    const {
+      toPublicTrackingOrder,
+      capturedPaymentMatchesOrder,
+    } = require("./razorpayPayments");
+    const tracked = toPublicTrackingOrder({
+      order_id: "FRM-1",
+      amount: 100,
+      customer_name: "Asha",
+      phone: "9876543210",
+      email: "a@example.com",
+      house_no_flat: "12",
+      razorpay_signature: "secret",
+    });
+    assert.equal(tracked.order_id, "FRM-1");
+    assert.equal(tracked.customer_name, undefined);
+    assert.equal(tracked.phone, undefined);
+    assert.equal(tracked.email, undefined);
+    assert.equal(tracked.house_no_flat, undefined);
+    assert.equal(tracked.razorpay_signature, undefined);
+
+    const order = { amount: 299, currency: "INR" };
+    assert.equal(capturedPaymentMatchesOrder({
+      status: "captured",
+      amount: 29900,
+      currency: "INR",
+    }, order), true);
+    assert.equal(capturedPaymentMatchesOrder({
+      status: "captured",
+      currency: "INR",
+    }, order), false);
+    assert.equal(capturedPaymentMatchesOrder({
+      status: "authorized",
+      amount: 29900,
+      currency: "INR",
+    }, order), false);
   });
 
   it("verifies webhook signatures", () => {

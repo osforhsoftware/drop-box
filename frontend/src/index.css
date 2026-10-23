@@ -2678,10 +2678,30 @@ body:has(.site-header) .offer-popup .offer-popup-close {
 .zone-editor-stage {
     position: relative;
     isolation: isolate;
+    min-height: 0;
+    contain: paint;
 }
 
 .zone-editor-stage .canvas-container {
     max-width: 100% !important;
+    max-height: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    overflow: hidden !important;
+}
+
+/* Customer customizer — overlay PNG stays inside the phone preview */
+.case-canvas-host {
+    position: relative;
+    min-width: 0;
+    height: min(70vh, 640px);
+    min-height: 320px;
+    contain: paint;
+}
+
+.case-canvas-host .canvas-container {
+    max-width: 100% !important;
+    max-height: 100% !important;
     margin-left: auto !important;
     margin-right: auto !important;
     overflow: hidden !important;

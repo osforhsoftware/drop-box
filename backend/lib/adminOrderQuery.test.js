@@ -135,6 +135,18 @@ describe("adminOrderExport", () => {
     assert.equal(quantityOf(sample[1]), 2);
   });
 
+  it("prefers the selected material label over catalog product name", () => {
+    assert.equal(
+      productLabel({
+        brand_name: "Apple",
+        model_name: "iPhone 15",
+        product_name: "Generic Case",
+        case_type_label: "Silicone Case",
+      }),
+      "Apple iPhone 15 Silicone Case"
+    );
+  });
+
   it("builds csv/xlsx/pdf buffers containing requested rows only", () => {
     const csv = buildExportFile(sample, { columns: ["order_id", "amount"], format: "csv", scope: "filtered" });
     const text = csv.buffer.toString("utf8");

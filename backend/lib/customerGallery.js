@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const sharp = require("sharp");
+const { convertToWebp } = require("../services/imageService");
 
 const GALLERY_SUBDIR = "customer-gallery";
 const THUMB_SUBDIR = "customer-gallery/thumbs";
@@ -27,40 +28,32 @@ function isAllowedGalleryMime(mimetype) {
   return ALLOWED_MIME.has(String(mimetype || "").toLowerCase());
 }
 
-async function processGalleryImage(buffer, uploadDir) {
+async function processGalleryImage(buffer, uploadDir, options = {}) {
   ensureGalleryDirs(uploadDir);
-
-  const meta = await sharp(buffer).rotate().metadata();
-  if (!meta.width || !meta.height) {
-    throw new Error("Invalid image file");
-  }
 
   const id = crypto.randomUUID().replace(/-/g, "");
   const filename = `${id}.webp`;
   const filePath = path.join(uploadDir, GALLERY_SUBDIR, filename);
-
-  const output = await sharp(buffer)
-    .rotate()
-    .resize({
-      width: MAX_WIDTH,
-      height: MAX_WIDTH,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .webp({ quality: WEBP_QUALITY })
-    .toFile(filePath);
+  const converted = await convertToWebp(buffer, {
+    enabled: true,
+    maxWidth: options.maxWidth || MAX_WIDTH,
+    quality: options.quality || WEBP_QUALITY,
+    targetKb: options.targetKb || 150,
+  });
+  await fs.promises.writeFile(filePath, converted.buffer);
+  const meta = await sharp(converted.buffer).metadata();
 
   const apiPath = `/api/uploads/${GALLERY_SUBDIR}/${filename}`;
   return {
     id,
     url: apiPath,
     thumbnail_url: apiPath,
-    width: output.width,
-    height: output.height,
+    width: meta.width,
+    height: meta.height,
   };
 }
 
-async function processGalleryImages(files, uploadDir) {
+async function processGalleryImages(files, uploadDir, options = {}) {
   const results = [];
   for (const file of files.slice(0, MAX_IMAGES)) {
     if (!file?.buffer) continue;
@@ -70,7 +63,7 @@ async function processGalleryImages(files, uploadDir) {
     if (file.buffer.length > MAX_UPLOAD_BYTES) {
       throw new Error(`Each image must be under ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`);
     }
-    results.push(await processGalleryImage(file.buffer, uploadDir));
+    results.push(await processGalleryImage(file.buffer, uploadDir, options));
   }
   return results;
 }

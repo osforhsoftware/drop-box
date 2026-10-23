@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
+const { resolveImageSettings } = require("./imageSettings");
 
 const PAYMENT_METHODS = Object.freeze(["manual_upi", "razorpay"]);
 const SECRET_SETTINGS_KEYS = Object.freeze([
@@ -66,7 +67,7 @@ function toPublicSettings(doc = {}) {
   } else {
     out.razorpay_key_id = null;
   }
-  return out;
+  return { ...out, ...resolveImageSettings(out) };
 }
 
 /** Whitelist fields admins may update; never persist secrets from the client. */
@@ -95,6 +96,7 @@ function defaultSettings() {
     currency: "INR",
     payment_method: "manual_upi",
     razorpay_key_id: getRazorpayKeyId() || null,
+    ...resolveImageSettings({}),
   };
 }
 
@@ -266,6 +268,55 @@ function stripOrderSecrets(order) {
   return rest;
 }
 
+const TRACKING_PRIVATE_KEYS = [
+  "id",
+  "user_id",
+  "customer_name",
+  "phone",
+  "email",
+  "notes",
+  "address",
+  "formatted_address",
+  "house_no_flat",
+  "building_name",
+  "street",
+  "landmark",
+  "country",
+  "state",
+  "district",
+  "city_area",
+  "post_office",
+  "pincode",
+  "utr",
+  "payment_screenshot_url",
+  "razorpay_signature",
+];
+
+/** Order tracking page: status and product info, without shipping or payment proof. */
+function toPublicTrackingOrder(order) {
+  const safe = stripOrderSecrets(order);
+  if (!safe || typeof safe !== "object") return safe;
+  const out = { ...safe };
+  for (const key of TRACKING_PRIVATE_KEYS) delete out[key];
+  return out;
+}
+
+/**
+ * Webhook payment.captured must include a captured status, matching currency,
+ * and the exact paise amount. A missing amount is not a match.
+ */
+function capturedPaymentMatchesOrder(paymentEntity, order) {
+  const status = String(paymentEntity?.status || "").toLowerCase();
+  const paidAmount = Number(paymentEntity?.amount);
+  const paidCurrency = String(paymentEntity?.currency || "").toUpperCase();
+  const expectedPaise = amountToPaise(order?.amount);
+  const expectedCurrency = String(order?.currency || "INR").toUpperCase();
+  return status === "captured"
+    && Number.isFinite(paidAmount)
+    && paidAmount === expectedPaise
+    && paidCurrency === expectedCurrency;
+}
+
 module.exports = {
   PAYMENT_METHODS,
   SECRET_SETTINGS_KEYS,
@@ -285,4 +336,6 @@ module.exports = {
   fetchAndConfirmPayment,
   toPublicOrderPayment,
   stripOrderSecrets,
+  toPublicTrackingOrder,
+  capturedPaymentMatchesOrder,
 };

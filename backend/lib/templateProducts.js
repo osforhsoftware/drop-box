@@ -1,3 +1,13 @@
+const path = require("path");
+const crypto = require("crypto");
+const fs = require("fs");
+const {
+  normalizeVariantInventory,
+  resolveVariantInventory,
+  availableStock,
+  productHasAvailableStock,
+} = require("./variantInventory");
+
 const CATEGORIES = [
   "Anime", "Gaming", "Luxury", "Minimal", "Nature", "Abstract",
   "Sports", "Travel", "Cars", "Quotes", "Photography", "Premium",
@@ -173,7 +183,19 @@ function buildListFilter(query) {
   }
 
   if (query.in_stock === "true") {
-    clauses.push({ stock: { $gt: 0 } });
+    clauses.push({
+      $or: [
+        { stock: { $gt: 0 } },
+        {
+          variant_inventory: {
+            $elemMatch: {
+              is_out_of_stock: { $ne: true },
+              stock_quantity: { $gt: 0 },
+            },
+          },
+        },
+      ],
+    });
   }
 
   if (query.ids) {
@@ -277,6 +299,8 @@ function parseFormFields(body, options = {}) {
   }
 
   const product_type = normalizedProductType(body.product_type);
+  const inventory = inventoryFields(body);
+  if (inventory.error) return { error: inventory.error };
 
   return {
     title,
@@ -292,7 +316,8 @@ function parseFormFields(body, options = {}) {
     material: String(body.material || "").trim(),
     price,
     sale_price: parseNumber(body.sale_price),
-    stock: Math.max(0, Math.floor(parseNumber(body.stock, 0))),
+    stock: inventory.stock,
+    variant_inventory: inventory.variant_inventory,
     sku: String(body.sku || "").trim().slice(0, 64) || null,
     tags: parseTags(body.tags),
     featured: parseBool(body.featured),
@@ -329,13 +354,175 @@ function displayTemplateTitle(title) {
   return `${base} (Copy)`;
 }
 
+function inventoryFields(body) {
+  const phone_models = parsePhoneModels(body.phone_models);
+  const fallbackStock = Math.max(0, Math.floor(parseNumber(body.stock, 0)));
+  if (!phone_models.length) {
+    return { stock: fallbackStock, variant_inventory: [] };
+  }
+  if (body.variant_inventory != null && body.variant_inventory !== "") {
+    const parsed = normalizeVariantInventory(body.variant_inventory, phone_models, fallbackStock);
+    if (parsed.error) return { error: parsed.error };
+    return {
+      stock: availableStock(parsed.value),
+      variant_inventory: parsed.value,
+    };
+  }
+  const variant_inventory = normalizeVariantInventory([], phone_models, fallbackStock).value;
+  return {
+    stock: availableStock(variant_inventory),
+    variant_inventory,
+  };
+}
+
+/** Local upload filename for a template-product image URL, or null for external media. */
+function templateProductUploadFilename(imageUrl) {
+  const match = String(imageUrl || "").match(/uploads\/template-products\/([^/?#]+)/i);
+  if (!match) return null;
+  let filename = match[1];
+  try {
+    filename = decodeURIComponent(filename);
+  } catch {
+    return null;
+  }
+  if (!filename || filename !== path.basename(filename)) return null;
+  if (filename === "." || filename === ".." || filename.includes("\0")) return null;
+  return filename;
+}
+
+/** Thumbnail, gallery, and SEO image URLs stored on a template product. */
+function collectTemplateProductMediaUrls(product) {
+  const urls = [];
+  const push = (url) => {
+    if (typeof url === "string" && url && !urls.includes(url)) urls.push(url);
+  };
+  if (!product) return urls;
+  push(product.thumbnail);
+  if (Array.isArray(product.images)) {
+    for (const url of product.images) push(url);
+  }
+  push(product.seo?.og_image);
+  return urls;
+}
+
+function remapTemplateProductMediaUrl(url, filenameMap) {
+  if (typeof url !== "string" || !url) return url;
+  const filename = templateProductUploadFilename(url);
+  if (!filename || !filenameMap.has(filename)) return url;
+  return url.replace(
+    /uploads\/template-products\/[^/?#]+/i,
+    `uploads/template-products/${filenameMap.get(filename)}`
+  );
+}
+
+function applyClonedTemplateProductMedia(product, filenameMap) {
+  const images = Array.isArray(product?.images)
+    ? product.images.map((url) => remapTemplateProductMediaUrl(url, filenameMap))
+    : [];
+  const thumbnail = product?.thumbnail
+    ? remapTemplateProductMediaUrl(product.thumbnail, filenameMap)
+    : images[0] || null;
+  let seo = product?.seo;
+  if (seo && typeof seo === "object") {
+    seo = {
+      ...seo,
+      og_image: seo.og_image ? remapTemplateProductMediaUrl(seo.og_image, filenameMap) : seo.og_image,
+    };
+  }
+  return { thumbnail, images, seo };
+}
+
+/**
+ * Copy local template-product uploads so a duplicate does not share files with the source.
+ * Missing or external URLs stay unchanged. Thumbnail, gallery, and og_image that pointed at
+ * the same source file keep pointing at one new file.
+ */
+function cloneTemplateProductMedia(product, options = {}) {
+  if (!options.uploadDir) {
+    throw new Error("uploadDir is required to clone template product media");
+  }
+  const fsImpl = options.fs || fs;
+  const randomUUID = options.randomUUID || (() => crypto.randomUUID());
+  const filenameMap = new Map();
+  const copied = [];
+  const dir = path.join(options.uploadDir, "template-products");
+  fsImpl.mkdirSync(dir, { recursive: true });
+
+  try {
+    for (const url of collectTemplateProductMediaUrls(product)) {
+      const filename = templateProductUploadFilename(url);
+      if (!filename || filenameMap.has(filename)) continue;
+      const src = path.join(dir, filename);
+      if (!fsImpl.existsSync(src)) continue;
+      const nextName = `${String(randomUUID()).replace(/-/g, "")}${path.extname(filename)}`;
+      const dest = path.join(dir, nextName);
+      fsImpl.copyFileSync(src, dest);
+      copied.push(dest);
+      filenameMap.set(filename, nextName);
+    }
+  } catch (err) {
+    for (const dest of copied) {
+      try {
+        fsImpl.unlinkSync(dest);
+      } catch {
+        /* ignore cleanup failure */
+      }
+    }
+    throw err;
+  }
+
+  return applyClonedTemplateProductMedia(product, filenameMap);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Mongo filter for other products that still store this template-product upload. */
+function templateProductMediaReferenceQuery(imageUrl, excludeIds = []) {
+  const filename = templateProductUploadFilename(imageUrl);
+  if (!filename) return null;
+  const pattern = new RegExp(
+    `uploads/template-products/${escapeRegExp(filename)}(?:$|[?#])`,
+    "i"
+  );
+  const clause = {
+    $or: [
+      { thumbnail: pattern },
+      { images: pattern },
+      { "seo.og_image": pattern },
+    ],
+  };
+  const ids = (Array.isArray(excludeIds) ? excludeIds : [excludeIds]).filter(Boolean);
+  if (!ids.length) return clause;
+  return { $and: [clause, { id: { $nin: ids } }] };
+}
+
+/** True when some product outside excludeIds still references the same upload file. */
+function templateProductMediaIsShared(imageUrl, products, excludeIds = []) {
+  const filename = templateProductUploadFilename(imageUrl);
+  if (!filename) return false;
+  const excluded = new Set(
+    (Array.isArray(excludeIds) ? excludeIds : [excludeIds]).filter(Boolean)
+  );
+  return (products || []).some((product) => {
+    if (!product || excluded.has(product.id)) return false;
+    return collectTemplateProductMediaUrls(product).some(
+      (url) => templateProductUploadFilename(url) === filename
+    );
+  });
+}
+
 function toPublicProduct(doc) {
   if (!doc || isTrashed(doc) || doc.status !== "published") return null;
   const { _id, ...rest } = doc;
+  const variants = resolveVariantInventory(doc);
   const product = {
     ...rest,
     title: displayTemplateTitle(rest.title),
     product_type: normalizedProductType(rest.product_type),
+    variants,
+    in_stock: productHasAvailableStock(doc),
     effective_price: effectivePrice(doc),
     discount_percent: doc.sale_price && doc.price > doc.sale_price
       ? Math.round((1 - doc.sale_price / doc.price) * 100)
@@ -377,4 +564,9 @@ module.exports = {
   stripCopySlugSuffix,
   toRelativeMediaUrl,
   toPublicProduct,
+  templateProductUploadFilename,
+  collectTemplateProductMediaUrls,
+  cloneTemplateProductMedia,
+  templateProductMediaReferenceQuery,
+  templateProductMediaIsShared,
 };

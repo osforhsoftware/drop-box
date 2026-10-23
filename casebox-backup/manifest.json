@@ -1,0 +1,99 @@
+{
+  "createdAt": "2026-10-23T06:05:03.588Z",
+  "mongoUrl": "mongodb://localhost:27017",
+  "dbName": "drop_box",
+  "collections": [
+    {
+      "collection": "hero_slides",
+      "count": 4,
+      "file": "hero_slides.json"
+    },
+    {
+      "collection": "settings",
+      "count": 1,
+      "file": "settings.json"
+    },
+    {
+      "collection": "template_products",
+      "count": 33,
+      "file": "template_products.json"
+    },
+    {
+      "collection": "case_types",
+      "count": 2,
+      "file": "case_types.json"
+    },
+    {
+      "collection": "contact_messages",
+      "count": 4,
+      "file": "contact_messages.json"
+    },
+    {
+      "collection": "popup_offers",
+      "count": 1,
+      "file": "popup_offers.json"
+    },
+    {
+      "collection": "templates",
+      "count": 44,
+      "file": "templates.json"
+    },
+    {
+      "collection": "brands",
+      "count": 9,
+      "file": "brands.json"
+    },
+    {
+      "collection": "customer_gallery",
+      "count": 17,
+      "file": "customer_gallery.json"
+    },
+    {
+      "collection": "phone_model_case_types",
+      "count": 141,
+      "file": "phone_model_case_types.json"
+    },
+    {
+      "collection": "razorpay_webhook_events",
+      "count": 0,
+      "file": "razorpay_webhook_events.json"
+    },
+    {
+      "collection": "products",
+      "count": 6,
+      "file": "products.json"
+    },
+    {
+      "collection": "promo_codes",
+      "count": 2,
+      "file": "promo_codes.json"
+    },
+    {
+      "collection": "demo",
+      "count": 0,
+      "file": "demo.json"
+    },
+    {
+      "collection": "auth_security",
+      "count": 8,
+      "file": "auth_security.json"
+    },
+    {
+      "collection": "models",
+      "count": 28,
+      "file": "models.json"
+    },
+    {
+      "collection": "users",
+      "count": 8,
+      "file": "users.json"
+    },
+    {
+      "collection": "orders",
+      "count": 29,
+      "file": "orders.json"
+    }
+  ],
+  "uploadsSource": "C:\\Users\\USER\\Downloads\\Osforh web\\drop-box\\drop-box\\backend\\uploads",
+  "uploadsTargetOnOtherPC": "backend/uploads"
+}

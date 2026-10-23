@@ -22,7 +22,26 @@ const EMPTY = {
   currency: "INR",
   payment_method: "manual_upi",
   razorpay_key_id: "",
+  image_compress_enabled: true,
+  image_max_width: 1200,
+  image_target_kb: 150,
+  image_webp_quality: 85,
 };
+
+function settingsFormFromApi(data = {}) {
+  return {
+    upi_id: data.upi_id || "",
+    merchant_name: data.merchant_name || "",
+    whatsapp_number: data.whatsapp_number || "",
+    currency: data.currency || "INR",
+    payment_method: data.payment_method || "manual_upi",
+    razorpay_key_id: data.razorpay_key_id || "",
+    image_compress_enabled: data.image_compress_enabled !== false,
+    image_max_width: data.image_max_width || 1200,
+    image_target_kb: data.image_target_kb || 150,
+    image_webp_quality: data.image_webp_quality || 85,
+  };
+}
 
 export default function AdminSettings() {
   const [form, setForm] = useState(EMPTY);
@@ -44,14 +63,7 @@ export default function AdminSettings() {
   }, []);
 
   useEffect(() => {
-    api.get("/settings").then((r) => setForm({
-      upi_id: r.data.upi_id || "",
-      merchant_name: r.data.merchant_name || "",
-      whatsapp_number: r.data.whatsapp_number || "",
-      currency: r.data.currency || "INR",
-      payment_method: r.data.payment_method || "manual_upi",
-      razorpay_key_id: r.data.razorpay_key_id || "",
-    }));
+    api.get("/settings").then((r) => setForm(settingsFormFromApi(r.data)));
     loadDefaultOverlay();
   }, [loadDefaultOverlay]);
 
@@ -65,24 +77,25 @@ export default function AdminSettings() {
         whatsapp_number: form.whatsapp_number,
         currency: form.currency,
         payment_method: form.payment_method,
+        image_compress_enabled: Boolean(form.image_compress_enabled),
+        image_max_width: Number(form.image_max_width),
+        image_target_kb: Number(form.image_target_kb),
+        image_webp_quality: Number(form.image_webp_quality),
       };
       // Public key only — never send secrets from the admin UI
       if (form.razorpay_key_id) {
         payload.razorpay_key_id = form.razorpay_key_id;
       }
       const r = await api.put("/settings", payload);
-      setForm({
-        upi_id: r.data.upi_id || "",
-        merchant_name: r.data.merchant_name || "",
-        whatsapp_number: r.data.whatsapp_number || "",
-        currency: r.data.currency || "INR",
-        payment_method: r.data.payment_method || "manual_upi",
-        razorpay_key_id: r.data.razorpay_key_id || "",
-      });
+      setForm(settingsFormFromApi(r.data));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(err.response?.data?.detail || "Could not save settings");
+      const detail = err.response?.data?.detail;
+      if (detail) setError(detail);
+      else if (!err.response) {
+        setError("Could not reach the API. Start the backend on port 8000, then save again.");
+      } else setError("Could not save settings");
     }
   };
 
@@ -156,6 +169,50 @@ export default function AdminSettings() {
             </p>
           </div>
         )}
+
+        <section className="border-t border-white/10 pt-6 space-y-4" data-testid="settings-image-compression">
+          <div>
+            <div className="label-eyebrow mb-1">Images</div>
+            <h2 className="font-display text-xl">Image compression</h2>
+            <p className="text-sm text-white/45 mt-2">
+              Uploaded images are saved as WebP. Customer artwork, the case preview, and phone case overlay PNGs stay as the original file.
+            </p>
+          </div>
+          <label className="flex items-center justify-between gap-4 rounded-lg border border-white/10 px-4 py-3">
+            <span className="text-sm">Compress uploads</span>
+            <input
+              type="checkbox"
+              data-testid="settings-image-compress-enabled"
+              checked={form.image_compress_enabled !== false}
+              onChange={(e) => setForm({ ...form, image_compress_enabled: e.target.checked })}
+              className="h-4 w-4 accent-brand"
+            />
+          </label>
+          <div className={`grid sm:grid-cols-3 gap-3 ${form.image_compress_enabled === false ? "opacity-50" : ""}`}>
+            {[
+              { k: "image_max_width", l: "Max edge (px)", min: 320, max: 4096 },
+              { k: "image_target_kb", l: "Target size (KB)", min: 20, max: 2000 },
+              { k: "image_webp_quality", l: "WebP quality", min: 40, max: 100 },
+            ].map((f) => (
+              <div key={f.k}>
+                <div className="label-eyebrow mb-2">{f.l}</div>
+                <input
+                  type="number"
+                  min={f.min}
+                  max={f.max}
+                  disabled={form.image_compress_enabled === false}
+                  data-testid={`settings-${f.k}`}
+                  value={form[f.k]}
+                  onChange={(e) => setForm({ ...form, [f.k]: e.target.value })}
+                  className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:ring-1 focus:ring-brand focus:outline-none font-mono disabled:cursor-not-allowed"
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-white/40">
+            When this is on, brand logos, phone photos, shop images, hero slides, popups, payment screenshots, and gallery photos are saved as WebP. Customer artwork, the case preview, and case overlay templates are not compressed. Defaults match <span className="font-mono">IMAGE_MAX_WIDTH</span>, <span className="font-mono">IMAGE_TARGET_KB</span>, and <span className="font-mono">IMAGE_WEBP_QUALITY</span> until you save here.
+          </p>
+        </section>
 
         {error && <div className="text-red-400 text-sm">{error}</div>}
         <button data-testid="save-settings" className="btn-primary">Save changes</button>

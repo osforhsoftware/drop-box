@@ -218,6 +218,10 @@ On first startup, the backend seeds an admin account from `ADMIN_EMAIL` and `ADM
 | `ADMIN_EMAIL` | Yes | Admin account email (seeded on startup) |
 | `ADMIN_PASSWORD` | Yes | Admin account password (seeded on startup) |
 | `PORT` | No | API port (default: `8000`) |
+| `IMAGE_COMPRESS_ENABLED` | No | `true` to compress uploads to WebP. Admin Settings can override this (default: `true`) |
+| `IMAGE_MAX_WIDTH` | No | Max WebP edge in pixels. Admin Settings can override (default: `1200`) |
+| `IMAGE_TARGET_KB` | No | Target compressed size in KB. Admin Settings can override (default: `150`) |
+| `IMAGE_WEBP_QUALITY` | No | Starting WebP quality, reduced until the target size or quality 40. Admin Settings can override (default: `85`) |
 | `PUBLIC_BASE_URL` | No | Public URL prefix for uploaded file links |
 | `NODE_ENV` | No | Set to `production` for secure cookies |
 | `INDIA_POST_API_URL` | No | India Post PIN lookup base URL (defaults to `https://api.postalpincode.in/pincode`) |
@@ -298,6 +302,28 @@ Allowed formats: **JPG, JPEG, PNG, WEBP, GIF** · Max size: **12 MB**
 | `GET` | `/` | `{ "status": "ok", "service": "CASEBOX" }` |
 
 Static uploads: `/api/uploads/{designs|payments|templates}/<filename>`
+
+### Image compression
+
+`POST /api/upload` accepts one JPG, PNG, or WebP field named `image` (max 10 MB). The file is rotated from EXIF, resized, and saved as WebP. A logged-in user token is required.
+
+```bash
+curl -F "image=@photo.jpg" http://localhost:3000/api/upload
+```
+
+This API listens on port **8000** by default. Send the session cookie or a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer TOKEN" -F "image=@photo.jpg" http://localhost:8000/api/upload
+```
+
+Product photos use the same pipeline and also write thumb, medium, and large variants:
+
+```bash
+curl -H "Authorization: Bearer ADMIN_TOKEN" -F "image=@photo.jpg" http://localhost:8000/api/products/PRODUCT_ID/image
+```
+
+Compressed files are served from `/uploads/<uuid>.webp` with a one-year cache.
 
 ---
 

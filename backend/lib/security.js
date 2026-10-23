@@ -26,11 +26,6 @@ function loginPairKey(email, ip) {
   return `${email.toLowerCase()}|${ip}`;
 }
 
-function isAdminEmail(email) {
-  const admin = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  return Boolean(admin && email.toLowerCase() === admin);
-}
-
 function getProgressiveDelayMs(failures) {
   if (failures <= 1) return 600;
   if (failures === 2) return 1000;
@@ -169,8 +164,28 @@ function isValidOrderId(orderId) {
 function isValidUploadUrl(url) {
   if (!url || typeof url !== "string") return false;
   if (url.length > 512) return false;
-  return /uploads\/(designs|payments|templates|prints|popups|brands|models|products|template-products|customer-gallery(?:\/thumbs)?)\/[a-zA-Z0-9._-]+$/.test(url)
-    || url.includes("/api/uploads/");
+  if (url.includes("..") || url.includes("\\") || url.includes("\0")) return false;
+  const pathOnly = url.replace(/^https?:\/\/[^/]+/i, "");
+  return /^(?:\/api)?\/uploads\/(?:designs|payments|templates|prints|popups|brands|models|products|hero|categories|template-products|customer-gallery(?:\/thumbs)?)\/[a-zA-Z0-9._-]+$/.test(pathOnly);
+}
+
+/** Problems that must stop a public server from booting. Empty outside production. */
+function productionConfigErrors(env = process.env) {
+  if (env.NODE_ENV !== "production") return [];
+  const problems = [];
+  const secret = String(env.JWT_SECRET || "");
+  if (secret.length < 32 || /replace_with|changeme|^drop_box$|^secret$/i.test(secret)) {
+    problems.push("JWT_SECRET must be a unique random string of at least 32 characters");
+  }
+  const origins = String(env.CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!origins.length) {
+    problems.push("CORS_ORIGINS must list the live website origins");
+  }
+  const adminPassword = String(env.ADMIN_PASSWORD || "");
+  if (adminPassword.length < 8 || /replace_with|changeme/i.test(adminPassword)) {
+    problems.push("ADMIN_PASSWORD must be a unique password of at least 8 characters");
+  }
+  return problems;
 }
 
 async function ensureSecurityIndexes(db) {
@@ -190,7 +205,7 @@ async function getLockRecord(db, type, key) {
 }
 
 async function checkLoginLockout(db, email, ip) {
-  if (skipLimits || isAdminEmail(email)) {
+  if (skipLimits) {
     return { locked: false, failures: 0, delayMs: 0 };
   }
 
@@ -219,7 +234,7 @@ async function checkLoginLockout(db, email, ip) {
 }
 
 async function recordLoginFailure(db, email, ip) {
-  if (skipLimits || isAdminEmail(email)) {
+  if (skipLimits) {
     return { failures: 0, delayMs: 0 };
   }
 
@@ -317,6 +332,7 @@ module.exports = {
   clampString,
   validateStartupSecrets,
   parseCorsOrigins,
+  productionConfigErrors,
   isValidOrderId,
   isValidUploadUrl,
   ensureSecurityIndexes,

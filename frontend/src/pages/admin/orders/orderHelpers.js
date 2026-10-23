@@ -81,14 +81,26 @@ export function fmtDate(iso) {
   }
 }
 
+export function orderMaterialLabel(item) {
+  if (!item) return "";
+  return String(item.case_type_label || item.material || item.product_name || "").trim();
+}
+
+export function orderMaterialFinish(item) {
+  const finish = String(item?.material || "").trim();
+  const label = orderMaterialLabel(item);
+  if (!finish || finish.toLowerCase() === label.toLowerCase()) return "";
+  return finish;
+}
+
 export function productLabel(order) {
   if (Array.isArray(order?.items) && order.items.length > 0) {
     return order.items
-      .map((item) => [item.brand_name, item.model_name, item.product_name].filter(Boolean).join(" "))
+      .map((item) => [item.brand_name, item.model_name, orderMaterialLabel(item)].filter(Boolean).join(" "))
       .filter(Boolean)
       .join(", ");
   }
-  return [order?.brand_name, order?.model_name, order?.product_name].filter(Boolean).join(" ") || "—";
+  return [order?.brand_name, order?.model_name, orderMaterialLabel(order)].filter(Boolean).join(" ") || "—";
 }
 
 export function quantityOf(order) {

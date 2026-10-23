@@ -12,6 +12,7 @@ import {
   normalizeProductType,
   TEMPLATE_THUMB_SPEC,
   TEMPLATE_TAG_SUGGESTIONS,
+  syncVariantRows,
 } from "../../constants/templateProducts";
 import {
   Plus, Trash2, Pencil, Copy, Star, Eye, EyeOff, Globe, Search, X, Check, RotateCcw,
@@ -36,6 +37,7 @@ const EMPTY = {
   price: "",
   sale_price: "",
   stock: "10",
+  variant_inventory: [],
   sku: "",
   tags: [],
   featured: false,
@@ -50,6 +52,21 @@ const EMPTY = {
 };
 
 const NON_COLOR_TAG_SUGGESTIONS = TEMPLATE_TAG_SUGGESTIONS.filter((t) => !isColorTag(t));
+
+const EMPTY_MATERIAL = {
+  case_type: "",
+  price: "",
+  sale_price: "",
+  description: "",
+  short_description: "",
+  sku: "",
+  stock: "10",
+  status: "published",
+};
+
+function caseTypeKey(slug) {
+  return String(slug || "").trim().toLowerCase().replace(/-case$/, "");
+}
 
 function mergeColorAndOtherTags(colorTags, otherTags) {
   return [...colorTags, ...otherTags];
@@ -76,6 +93,11 @@ export default function AdminTemplateProducts() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [previewItem, setPreviewItem] = useState(null);
   const [caseTypes, setCaseTypes] = useState([]);
+  const [materialSiblings, setMaterialSiblings] = useState([]);
+  const [materialForm, setMaterialForm] = useState(EMPTY_MATERIAL);
+  const [linkProductId, setLinkProductId] = useState("");
+  const [linkTargets, setLinkTargets] = useState([]);
+  const [materialSaving, setMaterialSaving] = useState(false);
   const thumbRef = useRef(null);
   const galleryRef = useRef(null);
 
@@ -121,6 +143,10 @@ export default function AdminTemplateProducts() {
     setPreview(null);
     setExistingImages([]);
     setRemoveImages([]);
+    setMaterialSiblings([]);
+    setMaterialForm(EMPTY_MATERIAL);
+    setLinkProductId("");
+    setLinkTargets([]);
     setShowForm(true);
   };
 
@@ -141,6 +167,11 @@ export default function AdminTemplateProducts() {
       price: String(item.price),
       sale_price: item.sale_price != null ? String(item.sale_price) : "",
       stock: String(item.stock ?? 0),
+      variant_inventory: syncVariantRows(
+        item.phone_models || [],
+        item.variants?.length ? item.variants : item.variant_inventory,
+        item.stock ?? 0
+      ),
       sku: item.sku || "",
       tags: [...(item.tags || [])],
       featured: item.featured,
@@ -158,12 +189,39 @@ export default function AdminTemplateProducts() {
     setPreview(resolveMediaUrl(item.thumbnail));
     setExistingImages(item.images || []);
     setRemoveImages([]);
+    setMaterialForm(EMPTY_MATERIAL);
+    setLinkProductId("");
     setShowForm(true);
+    loadMaterialGroup(item);
+  };
+
+  const loadMaterialGroup = async (item) => {
+    try {
+      const [groupRes, listRes] = await Promise.all([
+        api.get(`/admin/template-products/${item.id}/material-variants`),
+        api.get("/admin/template-products", { params: { page: 1, limit: 100, status: "all" } }),
+      ]);
+      const siblings = groupRes.data.items || [item];
+      setMaterialSiblings(siblings);
+      const groupedIds = new Set(siblings.map((row) => row.id));
+      setLinkTargets(
+        (listRes.data.items || []).filter((row) => (
+          !groupedIds.has(row.id) && !row.design_id && !row.trashed_at
+        ))
+      );
+    } catch {
+      setMaterialSiblings([item]);
+      setLinkTargets([]);
+    }
   };
 
   const closeForm = () => {
     setShowForm(false);
     setEditing(null);
+    setMaterialSiblings([]);
+    setMaterialForm(EMPTY_MATERIAL);
+    setLinkProductId("");
+    setLinkTargets([]);
     if (thumbRef.current) thumbRef.current.value = "";
     if (galleryRef.current) galleryRef.current.value = "";
   };
@@ -240,7 +298,7 @@ export default function AdminTemplateProducts() {
 
   const buildFormData = () => {
     const fd = new FormData();
-    const skip = new Set(["phone_models", "tags"]);
+    const skip = new Set(["phone_models", "tags", "variant_inventory"]);
     Object.entries(form).forEach(([k, v]) => {
       if (skip.has(k)) return;
       if (typeof v === "boolean") fd.append(k, String(v));
@@ -249,6 +307,14 @@ export default function AdminTemplateProducts() {
     });
     fd.append("phone_models", JSON.stringify(form.phone_models));
     fd.append("tags", JSON.stringify(form.tags));
+    fd.append("variant_inventory", JSON.stringify(
+      (form.variant_inventory || []).map((row) => ({
+        variant_id: row.variant_id,
+        model_name: row.model_name,
+        stock_quantity: Math.max(0, Math.floor(Number(row.stock_quantity) || 0)),
+        is_out_of_stock: row.is_out_of_stock === true || Number(row.stock_quantity) <= 0,
+      }))
+    ));
     if (thumbnail) fd.append("thumbnail", thumbnail);
     gallery.forEach((f) => fd.append("gallery", f));
     if (removeImages.length) fd.append("remove_images", JSON.stringify(removeImages));
@@ -277,6 +343,156 @@ export default function AdminTemplateProducts() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const isVariantOut = (variant) =>
+    variant?.is_out_of_stock === true || Number(variant?.stock_quantity) <= 0;
+
+  const variantStockConfirmMessage = (modelName, markOut) =>
+    markOut
+      ? `Mark "${modelName}" out of stock? Shoppers will not be able to buy this model. Other models and this product page stay available.`
+      : `Mark "${modelName}" back in stock? Shoppers will be able to buy this model again.`;
+
+  const applyVariantOutOfStock = async (item, variant, markOut) => {
+    try {
+      const res = await api.patch(
+        `/admin/template-products/${item.id}/variants/${encodeURIComponent(variant.variant_id)}`,
+        { is_out_of_stock: markOut }
+      );
+      setData((prev) => ({
+        ...prev,
+        items: prev.items.map((row) => (row.id === item.id ? res.data : row)),
+      }));
+      toast.success(
+        markOut
+          ? `${variant.model_name} marked out of stock`
+          : `${variant.model_name} is back in stock`
+      );
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not update stock");
+    }
+  };
+
+  const requestToggleVariantOutOfStock = (item, variant) => {
+    const out = isVariantOut(variant);
+    if (out && Number(variant.stock_quantity) <= 0) {
+      toast.error(`Set a stock quantity above 0 for ${variant.model_name} before marking it in stock`);
+      return;
+    }
+    setConfirmAction({
+      type: "variantOos",
+      item,
+      variant,
+      markOut: !out,
+      confirmLabel: !out ? "Mark out of stock" : "Mark in stock",
+      message: variantStockConfirmMessage(variant.model_name, !out),
+    });
+  };
+
+  const requestToggleFormVariantStock = (index, row) => {
+    const out = isVariantOut(row);
+    if (out && Number(row.stock_quantity) <= 0) {
+      toast.error(`Set a stock quantity above 0 for ${row.model_name} before marking it in stock`);
+      return;
+    }
+    setConfirmAction({
+      type: "formVariantOos",
+      index,
+      markOut: !out,
+      confirmLabel: !out ? "Mark out of stock" : "Mark in stock",
+      message: `${variantStockConfirmMessage(row.model_name, !out)} You still need to save this phone case.`,
+    });
+  };
+
+  const applyMaterialGroup = (data, currentId = editing?.id) => {
+    const items = data.items || [];
+    setMaterialSiblings(items);
+    const groupedIds = new Set(items.map((row) => row.id));
+    setLinkTargets((prev) => prev.filter((row) => !groupedIds.has(row.id)));
+    const current = items.find((row) => row.id === currentId);
+    if (current) setEditing((prev) => (prev ? { ...prev, ...current } : current));
+  };
+
+  const addMaterialVariant = async () => {
+    if (!editing) return;
+    if (!materialForm.case_type || !materialForm.price) {
+      toast.error("Choose a material and enter a price");
+      return;
+    }
+    setMaterialSaving(true);
+    try {
+      const res = await api.post(`/admin/template-products/${editing.id}/material-variants`, {
+        case_type: materialForm.case_type,
+        price: Number(materialForm.price),
+        sale_price: materialForm.sale_price === "" ? null : Number(materialForm.sale_price),
+        description: materialForm.description,
+        short_description: materialForm.short_description,
+        sku: materialForm.sku,
+        stock: materialForm.stock,
+        status: materialForm.status,
+      });
+      applyMaterialGroup(res.data);
+      setMaterialForm(EMPTY_MATERIAL);
+      toast.success("Material variant added");
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not add material");
+    } finally {
+      setMaterialSaving(false);
+    }
+  };
+
+  const linkMaterial = async () => {
+    if (!editing || !linkProductId) return;
+    setMaterialSaving(true);
+    try {
+      const res = await api.post(`/admin/template-products/${editing.id}/link-design`, {
+        product_id: linkProductId,
+      });
+      applyMaterialGroup(res.data);
+      setLinkProductId("");
+      toast.success("Existing product linked as a material");
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not link product");
+    } finally {
+      setMaterialSaving(false);
+    }
+  };
+
+  const unlinkMaterial = async (item) => {
+    setMaterialSaving(true);
+    try {
+      await api.post(`/admin/template-products/${item.id}/unlink-design`);
+      toast.success("Material unlinked from this design");
+      if (editing) await loadMaterialGroup(editing);
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not unlink material");
+    } finally {
+      setMaterialSaving(false);
+    }
+  };
+
+  const toggleMaterialStatus = async (item) => {
+    const nextStatus = item.status === "published" ? "draft" : "published";
+    try {
+      await api.patch(`/admin/template-products/${item.id}/status`, { status: nextStatus });
+      toast.success(nextStatus === "published" ? "Material enabled" : "Material disabled");
+      if (editing) await loadMaterialGroup(editing);
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not update material");
+    }
+  };
+
+  const updateVariantRow = (index, patch) => {
+    setForm((current) => ({
+      ...current,
+      variant_inventory: current.variant_inventory.map((row, i) => (
+        i === index ? { ...row, ...patch } : row
+      )),
+    }));
   };
 
   const toggleSelect = (id) => {
@@ -337,10 +553,15 @@ export default function AdminTemplateProducts() {
 
   const executeConfirmAction = async () => {
     if (!confirmAction) return;
-    const { type, item, nextStatus, url, index, bulkAction } = confirmAction;
+    const { type, item, nextStatus, url, index, bulkAction, variant, markOut } = confirmAction;
     setConfirmAction(null);
     try {
-      if (type === "status") {
+      if (type === "variantOos") {
+        await applyVariantOutOfStock(item, variant, markOut);
+      } else if (type === "formVariantOos") {
+        updateVariantRow(index, { is_out_of_stock: markOut });
+        toast.success(markOut ? "Marked out of stock — save to apply" : "Marked in stock — save to apply");
+      } else if (type === "status") {
         await api.patch(`/admin/template-products/${item.id}/status`, { status: nextStatus });
         toast.success(nextStatus === "published" ? "Phone case published" : "Phone case unpublished");
         load(data.page);
@@ -565,8 +786,13 @@ export default function AdminTemplateProducts() {
                         className="w-10 h-12 object-cover rounded-lg"
                       />
                     </td>
-                    <td className="p-4 font-medium max-w-[180px] truncate" title={item.title}>
-                      {displayTemplateTitle(item.title)}
+                    <td className="p-4 font-medium max-w-[180px]" title={item.title}>
+                      <span className="truncate block">{displayTemplateTitle(item.title)}</span>
+                      {item.design_id && (
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-brand/80">
+                          Linked design
+                        </span>
+                      )}
                     </td>
                     <td className="p-4 text-white/60 text-xs max-w-[120px]">
                       {productTypeLabel(normalizeProductType(item.product_type))}
@@ -574,7 +800,40 @@ export default function AdminTemplateProducts() {
                     <td className="p-4 text-white/60">{item.phone_brand}</td>
                     <td className="p-4 text-white/60">{item.category}</td>
                     <td className="p-4">{formatPrice(item.sale_price || item.price)}</td>
-                    <td className="p-4">{item.stock}</td>
+                    <td className="p-4 align-top">
+                      {(item.variants || []).length === 0 ? (
+                        item.stock
+                      ) : (
+                        <ul className="space-y-1.5 min-w-[180px]">
+                          {item.variants.map((variant) => {
+                            const out = isVariantOut(variant);
+                            return (
+                              <li key={variant.variant_id} className="flex items-center justify-between gap-2">
+                                <span className="min-w-0">
+                                  <span className="block truncate text-xs">{variant.model_name}</span>
+                                  <span className={`text-[10px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
+                                    {out ? "Out of stock" : `${variant.stock_quantity} in stock`}
+                                  </span>
+                                </span>
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={out}
+                                  aria-label={`${out ? "Mark in stock" : "Mark out of stock"}: ${variant.model_name}`}
+                                  title={out ? "Mark in stock" : "Mark out of stock"}
+                                  data-testid={`variant-oos-toggle-${variant.variant_id}`}
+                                  disabled={isTrashView}
+                                  onClick={() => requestToggleVariantOutOfStock(item, variant)}
+                                  className="shrink-0 disabled:opacity-40"
+                                >
+                                  <StockSwitchKnob on={out} />
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </td>
                     <td className="p-4">
                       {isTrashView ? (
                         <span className="text-white/20">—</span>
@@ -666,32 +925,35 @@ export default function AdminTemplateProducts() {
       )}
 
       {confirmAction && (
-        <div className="fixed inset-0 z-[60] bg-black/70 grid place-items-center p-4" onClick={() => setConfirmAction(null)}>
+        <div className="fixed inset-0 z-[80] bg-black/70 grid place-items-center p-4" onClick={() => setConfirmAction(null)}>
           <div
             data-testid="template-status-confirm"
             onClick={(e) => e.stopPropagation()}
-            className="glass rounded-2xl p-6 w-full max-w-sm space-y-5"
+            className="glass rounded-2xl p-6 w-full max-w-md space-y-5"
           >
             <h2 className="font-display text-xl">Confirm</h2>
             <p className="text-white/70 text-sm break-words">{confirmAction.message}</p>
-            <div className="flex gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setConfirmAction(null)}
-                className="flex-1 px-4 py-3 rounded-lg border border-white/10 text-white/70 hover:bg-white/[0.04]"
+                className="min-h-12 px-3 rounded-lg border border-white/10 text-white/70 hover:bg-white/[0.04] inline-flex items-center justify-center text-sm whitespace-nowrap"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={executeConfirmAction}
-                className={`flex-1 px-4 py-3 rounded-lg text-white ${
+                className={`min-h-12 px-3 rounded-lg text-white inline-flex items-center justify-center text-sm whitespace-nowrap ${
                   confirmAction.destructive
                     ? "bg-red-600 hover:bg-red-500"
                     : "bg-brand-gradient bg-brand-gradient-hover text-white"
                 }`}
               >
-                {confirmAction.destructive ? (confirmAction.type === "purge" || confirmAction.bulkAction === "purge" ? "Delete forever" : "Delete") : "Confirm"}
+                {confirmAction.confirmLabel
+                  || (confirmAction.destructive
+                    ? (confirmAction.type === "purge" || confirmAction.bulkAction === "purge" ? "Delete forever" : "Delete")
+                    : "Confirm")}
               </button>
             </div>
           </div>
@@ -788,9 +1050,19 @@ export default function AdminTemplateProducts() {
               <TagSelect
                 label="Phone models"
                 value={form.phone_models}
-                onChange={(phone_models) => set("phone_models", phone_models)}
+                onChange={(phone_models) => {
+                  setForm((current) => ({
+                    ...current,
+                    phone_models,
+                    variant_inventory: syncVariantRows(
+                      phone_models,
+                      current.variant_inventory,
+                      current.stock
+                    ),
+                  }));
+                }}
                 placeholder="Type a model name and press Enter"
-                hint="Add each phone model separately — they appear below as selected tags."
+                hint="Add each phone model separately — stock is tracked on that model only."
                 testId="phone-case-models"
               />
               <div className="grid grid-cols-2 gap-3">
@@ -824,6 +1096,155 @@ export default function AdminTemplateProducts() {
               )}
             </fieldset>
 
+            {editing && (
+              <fieldset className="space-y-4" data-testid="material-variants-admin">
+                <legend className="label-eyebrow mb-2">Material variants</legend>
+                <p className="text-[11px] text-white/35">
+                  One shop listing is shown for this design. Each material keeps its own price, description, SKU, and stock. Existing product IDs are preserved.
+                </p>
+                <div className="space-y-2">
+                  {materialSiblings.map((row) => {
+                    const out = Number(row.stock) <= 0;
+                    return (
+                      <div key={row.id} className="rounded-lg border border-white/10 px-3 py-2 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-sm truncate">
+                              {caseTypes.find((c) => c.slug === row.case_type)?.name || row.case_type}
+                              {row.id === editing.id ? " · this product" : ""}
+                            </div>
+                            <div className={`text-[11px] ${row.status !== "published" ? "text-amber-400" : out ? "text-amber-400" : "text-emerald-400"}`}>
+                              {formatPrice(row.sale_price || row.price)} · {row.status === "published" ? (out ? "Out of stock" : `${row.stock} in stock`) : "Disabled"}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {row.id !== editing.id && (
+                              <button
+                                type="button"
+                                className="text-[11px] text-white/60 hover:text-white"
+                                onClick={() => openEdit(row)}
+                              >
+                                Edit
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="text-[11px] text-white/60 hover:text-white"
+                              onClick={() => toggleMaterialStatus(row)}
+                            >
+                              {row.status === "published" ? "Disable" : "Enable"}
+                            </button>
+                            {materialSiblings.length > 1 && (
+                              <button
+                                type="button"
+                                className="text-[11px] text-white/50 hover:text-red-300"
+                                onClick={() => unlinkMaterial(row)}
+                                disabled={materialSaving}
+                              >
+                                Unlink
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Add material">
+                    <select
+                      value={materialForm.case_type}
+                      onChange={(e) => setMaterialForm((current) => ({ ...current, case_type: e.target.value }))}
+                      className="form-field"
+                      data-testid="add-material-type"
+                    >
+                      <option value="">Select material</option>
+                      {caseTypes
+                        .filter((c) => !materialSiblings.some((row) => caseTypeKey(row.case_type) === caseTypeKey(c.slug)))
+                        .map((c) => (
+                          <option key={c.id || c.slug} value={c.slug}>{c.name}</option>
+                        ))}
+                    </select>
+                  </Field>
+                  <Field label="Price" required>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={materialForm.price}
+                      onChange={(e) => setMaterialForm((current) => ({ ...current, price: e.target.value }))}
+                      className="form-field"
+                      data-testid="add-material-price"
+                    />
+                  </Field>
+                  <Field label="Sale price">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={materialForm.sale_price}
+                      onChange={(e) => setMaterialForm((current) => ({ ...current, sale_price: e.target.value }))}
+                      className="form-field"
+                    />
+                  </Field>
+                  <Field label="Stock">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={materialForm.stock}
+                      onChange={(e) => setMaterialForm((current) => ({ ...current, stock: e.target.value }))}
+                      className="form-field"
+                    />
+                  </Field>
+                </div>
+                <Field label="Material description">
+                  <textarea
+                    rows={2}
+                    value={materialForm.description}
+                    onChange={(e) => setMaterialForm((current) => ({ ...current, description: e.target.value }))}
+                    className="form-field"
+                    placeholder="Shown when this material is selected"
+                  />
+                </Field>
+                <button
+                  type="button"
+                  onClick={addMaterialVariant}
+                  disabled={materialSaving}
+                  className="btn-secondary text-sm"
+                  data-testid="add-material-submit"
+                >
+                  {materialSaving ? "Saving…" : "Add material variant"}
+                </button>
+                {linkTargets.length > 0 && (
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <Field label="Link existing product">
+                      <select
+                        value={linkProductId}
+                        onChange={(e) => setLinkProductId(e.target.value)}
+                        className="form-field"
+                      >
+                        <option value="">Select a standalone product</option>
+                        {linkTargets.map((row) => (
+                          <option key={row.id} value={row.id}>
+                            {displayTemplateTitle(row.title)} · {row.case_type}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <button
+                      type="button"
+                      onClick={linkMaterial}
+                      disabled={materialSaving || !linkProductId}
+                      className="btn-secondary text-sm mb-0.5"
+                    >
+                      Link
+                    </button>
+                  </div>
+                )}
+              </fieldset>
+            )}
+
             <fieldset className="space-y-4">
               <legend className="label-eyebrow mb-2">Pricing & stock</legend>
               <div className="grid grid-cols-2 gap-3">
@@ -833,22 +1254,82 @@ export default function AdminTemplateProducts() {
                 <Field label="Sale price">
                   <input type="number" min="0" step="1" placeholder="Optional offer price" value={form.sale_price} onChange={(e) => set("sale_price", e.target.value)} className="form-field" />
                 </Field>
-                <Field label="Stock quantity" hint="Units available. Set 0 to mark as out of stock.">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder="0"
-                    value={form.stock}
-                    onChange={(e) => set("stock", e.target.value)}
-                    className="form-field"
-                    data-testid="stock-quantity"
-                  />
-                </Field>
+                {form.phone_models.length === 0 && (
+                  <Field label="Stock quantity" hint="Used when this case has no phone models yet.">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                      value={form.stock}
+                      onChange={(e) => set("stock", e.target.value)}
+                      className="form-field"
+                      data-testid="stock-quantity"
+                    />
+                  </Field>
+                )}
                 <Field label="SKU">
                   <input placeholder="Stock keeping unit" value={form.sku} onChange={(e) => set("sku", e.target.value)} className="form-field" />
                 </Field>
               </div>
+              {form.phone_models.length > 0 && (
+                <div data-testid="variant-stock-list">
+                  <p className="text-[11px] text-white/35 mb-2">
+                    Each phone model has its own stock. Setting one model to 0 or out of stock leaves the other models and this product page available.
+                  </p>
+                  <div className="space-y-2">
+                    {form.variant_inventory.map((row, index) => {
+                      const out = isVariantOut(row);
+                      return (
+                        <div
+                          key={row.variant_id || row.model_name}
+                          className="grid grid-cols-[minmax(0,1fr)_4.75rem_auto] items-center gap-3 rounded-lg border border-white/10 px-3 py-2"
+                        >
+                          <div className="min-w-0 overflow-hidden">
+                            <div className="text-sm truncate">{row.model_name}</div>
+                            <div className={`text-[11px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
+                              {out ? "Out of stock" : "In stock"}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={row.stock_quantity}
+                              onChange={(e) => {
+                                const stock_quantity = e.target.value;
+                                const qty = Number(stock_quantity);
+                                updateVariantRow(index, {
+                                  stock_quantity,
+                                  is_out_of_stock: !Number.isFinite(qty) || qty <= 0,
+                                });
+                              }}
+                              className="form-field !w-full min-w-0 max-w-full text-center [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              aria-label={`Stock for ${row.model_name}`}
+                              data-testid={`variant-stock-${row.variant_id || index}`}
+                            />
+                          </div>
+                          <div className="flex items-center gap-2 justify-self-end shrink-0">
+                            <span className="text-[11px] text-white/45 whitespace-nowrap">Out of stock</span>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={out}
+                              aria-label={out ? `Mark ${row.model_name} in stock` : `Mark ${row.model_name} out of stock`}
+                              title={out ? "Mark in stock" : "Mark out of stock"}
+                              data-testid={`variant-oos-${row.variant_id || index}`}
+                              onClick={() => requestToggleFormVariantStock(index, row)}
+                            >
+                              <StockSwitchKnob on={out} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </fieldset>
 
             <fieldset className="space-y-4">
@@ -984,6 +1465,22 @@ export default function AdminTemplateProducts() {
         </div>
       )}
     </div>
+  );
+}
+
+function StockSwitchKnob({ on }) {
+  return (
+    <span
+      className={`pointer-events-none relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+        on ? "bg-amber-500" : "bg-emerald-500/70"
+      }`}
+    >
+      <span
+        className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+          on ? "translate-x-[22px]" : "translate-x-0.5"
+        }`}
+      />
+    </span>
   );
 }
 

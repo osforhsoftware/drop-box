@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const sharp = require("sharp");
 const { MongoClient } = require("mongodb");
 const { normalizeMaskZones } = require("../lib/cameraZone");
+const { synthesizeVariantInventory } = require("../lib/variantInventory");
 
 const ROOT_DIR = path.join(__dirname, "..");
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
@@ -157,6 +158,10 @@ async function seedProducts(db, catalog) {
       price: Number(product.price) || 299,
       sale_price: product.sale_price != null ? Number(product.sale_price) : null,
       stock: Math.max(0, Math.floor(Number(product.stock) || 10)),
+      variant_inventory: synthesizeVariantInventory(
+        Array.isArray(product.phone_models) ? product.phone_models : [],
+        Math.max(0, Math.floor(Number(product.stock) || 10))
+      ),
       sku: product.sku || null,
       tags: Array.isArray(product.tags) ? product.tags : [],
       featured: Boolean(product.featured),
@@ -182,6 +187,144 @@ async function seedProducts(db, catalog) {
     await col.insertOne(doc);
     console.log(`  created product: ${product.title} (${slug})`);
     created += 1;
+  }
+
+  return { created, skipped, errors };
+}
+
+/**
+ * Link extra materials onto a few demo designs using an explicit design_id.
+ * Never groups by title. Safe to re-run: existing variant slugs are skipped.
+ * Reverse: unset design_id on the parent and delete the demo-*-glass / demo-*-transparent docs.
+ */
+const DEMO_MATERIAL_GROUPS = [
+  {
+    parent_slug: "demo-abstract-art",
+    variants: [
+      {
+        slug: "demo-abstract-art-glass",
+        case_type: "glass",
+        price: 499,
+        description: "Premium glass-finish phone case with the Abstract Art design.",
+        short_description: "Abstract art on glass",
+        stock: 8,
+      },
+      {
+        slug: "demo-abstract-art-transparent",
+        case_type: "transparent",
+        price: 349,
+        description: "Transparent case that showcases the Abstract Art design.",
+        short_description: "Abstract art on a clear case",
+        stock: 0,
+      },
+    ],
+  },
+  {
+    parent_slug: "demo-fierce-tiger",
+    variants: [
+      {
+        slug: "demo-fierce-tiger-glass",
+        case_type: "glass",
+        price: 549,
+        description: "Premium glass-finish phone case with the Fierce Tiger design.",
+        short_description: "Fierce tiger on glass",
+        stock: 6,
+      },
+    ],
+  },
+];
+
+function pickAvailableCaseType(requested, available) {
+  const want = String(requested || "").toLowerCase();
+  const key = want.replace(/-case$/, "");
+  return available.find((slug) => {
+    const value = String(slug || "").toLowerCase();
+    return value === want || value.replace(/-case$/, "") === key;
+  }) || null;
+}
+
+async function seedMaterialVariants(db) {
+  const col = db.collection("template_products");
+  const [caseTypes, products] = await Promise.all([
+    db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray(),
+    db.collection("products").find({}, { projection: { slug: 1 } }).toArray(),
+  ]);
+  const available = [...new Set([
+    ...caseTypes.map((item) => String(item.slug || "").toLowerCase()).filter(Boolean),
+    ...products.map((item) => String(item.slug || "").toLowerCase()).filter(Boolean),
+  ])];
+
+  let created = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const group of DEMO_MATERIAL_GROUPS) {
+    const parent = await col.findOne({ slug: group.parent_slug });
+    if (!parent) {
+      console.warn(`  skip material group, parent missing: ${group.parent_slug}`);
+      errors += 1;
+      continue;
+    }
+
+    const designId = String(parent.design_id || "").trim() || crypto.randomUUID();
+    if (!parent.design_id) {
+      await col.updateOne({ id: parent.id }, { $set: { design_id: designId } });
+    }
+
+    for (const variant of group.variants) {
+      const existing = await col.findOne({ slug: variant.slug });
+      if (existing) {
+        if (!existing.design_id) {
+          await col.updateOne({ id: existing.id }, { $set: { design_id: designId } });
+        }
+        console.log(`  skip material (exists): ${variant.slug}`);
+        skipped += 1;
+        continue;
+      }
+
+      const caseType = pickAvailableCaseType(variant.case_type, available) || variant.case_type;
+      const ts = nowIso();
+      const stock = Math.max(0, Math.floor(Number(variant.stock) || 0));
+      const doc = {
+        id: crypto.randomUUID(),
+        title: parent.title,
+        slug: variant.slug,
+        product_type: parent.product_type || "customized",
+        description: variant.description || parent.description || "",
+        short_description: variant.short_description || parent.short_description || "",
+        phone_brand: parent.phone_brand || "",
+        phone_models: Array.isArray(parent.phone_models) ? parent.phone_models : [],
+        category: parent.category,
+        collection: parent.collection,
+        case_type: caseType,
+        material: variant.material || "",
+        price: Number(variant.price) || parent.price,
+        sale_price: variant.sale_price != null ? Number(variant.sale_price) : null,
+        stock,
+        variant_inventory: synthesizeVariantInventory(
+          Array.isArray(parent.phone_models) ? parent.phone_models : [],
+          stock
+        ),
+        sku: variant.sku || null,
+        tags: Array.isArray(parent.tags) ? parent.tags : [],
+        featured: false,
+        best_seller: Boolean(parent.best_seller),
+        new_arrival: Boolean(parent.new_arrival),
+        status: "published",
+        rating: parent.rating,
+        review_count: parent.review_count,
+        seo: parent.seo || {},
+        thumbnail: parent.thumbnail,
+        images: Array.isArray(parent.images) ? parent.images : [],
+        design_id: designId,
+        order_count: 0,
+        created_at: ts,
+        updated_at: ts,
+      };
+      await col.insertOne(doc);
+      console.log(`  created material: ${parent.title} / ${caseType} (${variant.slug})`);
+      created += 1;
+    }
   }
 
   return { created, skipped, errors };
@@ -397,6 +540,12 @@ async function main() {
     const productStats = await seedProducts(db, catalog);
     console.log(
       `Products: ${productStats.created} created, ${productStats.skipped} skipped, ${productStats.errors} errors\n`
+    );
+
+    console.log("=== Linking demo design materials ===");
+    const materialStats = await seedMaterialVariants(db);
+    console.log(
+      `Materials: ${materialStats.created} created, ${materialStats.skipped} skipped, ${materialStats.errors} errors\n`
     );
 
     console.log("=== Cloning Phone Case Templates ===");

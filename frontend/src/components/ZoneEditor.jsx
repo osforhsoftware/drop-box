@@ -376,6 +376,7 @@ export default function ZoneEditor({
 
         mountPrintArea(c, printAreaRef.current);
         renderAllZones(c, zonesRef.current);
+        fitCanvas();
 
         c.on("mouse:down", (opt) => {
           const imgObj = imageRef.current;

@@ -55,6 +55,10 @@ const {
   displayTemplateTitle,
   stripCopyTitleSuffix,
   stripCopySlugSuffix,
+  cloneTemplateProductMedia,
+  collectTemplateProductMediaUrls,
+  templateProductUploadFilename,
+  templateProductMediaReferenceQuery,
   isTrashed,
   notTrashedClause,
   trashedClause,
@@ -65,6 +69,25 @@ const {
   PHONE_BRANDS,
   PRODUCT_TYPES,
 } = require("./lib/templateProducts");
+const {
+  resolveVariantInventory,
+  assertCanPurchaseVariant,
+  applyVariantInventoryUpdate,
+  consumeVariantStock,
+  synthesizeVariantInventory,
+  availableStock,
+} = require("./lib/variantInventory");
+const {
+  groupProductsForListing,
+  toPublicListingProduct,
+  toPublicMaterialVariant,
+  paginateList,
+  findDuplicateCaseType,
+} = require("./lib/designGroup");
+const {
+  buildCaseTypeLabelMap,
+  snapshotOrderMaterial,
+} = require("./lib/orderMaterial");
 const {
   registerRateLimiter,
   apiRateLimiter,
@@ -81,6 +104,7 @@ const {
   clampString,
   validateStartupSecrets,
   parseCorsOrigins,
+  productionConfigErrors,
   isValidOrderId,
   isValidUploadUrl,
   ensureSecurityIndexes,
@@ -106,6 +130,8 @@ const {
   verifyWebhookSignature,
   fetchAndConfirmPayment,
   stripOrderSecrets,
+  toPublicTrackingOrder,
+  capturedPaymentMatchesOrder,
   getRazorpayKeyId,
   amountToPaise,
 } = require("./lib/razorpayPayments");
@@ -146,6 +172,17 @@ const {
   toPublicHeroSlide,
   seedDefaultHeroSlides,
 } = require("./lib/heroSlides");
+const {
+  ImageInputError,
+  createVariants,
+  prepareUpload,
+  compressDiskImage,
+  assertOverlayPng,
+} = require("./services/imageService");
+const {
+  resolveImageSettings,
+  imageSettingsUpdateFromBody,
+} = require("./lib/imageSettings");
 
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
@@ -352,8 +389,9 @@ async function resolveCatalogLine(line) {
       err.status = 404;
       throw err;
     }
-    if (templateProduct.stock <= 0) {
-      const err = new Error("This template is out of stock");
+    const stockError = assertCanPurchaseVariant(templateProduct, model.name, line.quantity);
+    if (stockError) {
+      const err = new Error(stockError);
       err.status = 400;
       throw err;
     }
@@ -419,11 +457,18 @@ function deletePopupImageFile(imageUrl) {
   }
 }
 
+function safeUploadFilename(name) {
+  const filename = String(name || "");
+  if (!/^[a-zA-Z0-9._-]+$/.test(filename)) return null;
+  return filename;
+}
+
 function catalogImagePathFromUrl(imageUrl, subdir) {
-  if (!imageUrl || !subdir) return null;
+  if (!imageUrl || !subdir || !/^[a-z0-9-]+$/.test(subdir)) return null;
   const match = String(imageUrl).match(new RegExp(`uploads/${subdir}/([^/?#]+)`));
-  if (!match) return null;
-  return path.join(UPLOAD_DIR, subdir, match[1]);
+  const filename = safeUploadFilename(match?.[1]);
+  if (!filename) return null;
+  return path.join(UPLOAD_DIR, subdir, filename);
 }
 
 function deleteCatalogImageFile(imageUrl, subdir) {
@@ -519,6 +564,19 @@ function extractToken(req) {
   return token;
 }
 
+async function attachUserIfPresent(req, _res, next) {
+  const token = extractToken(req);
+  if (!token) return next();
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALGO] });
+    const user = await db.collection("users").findOne({ id: payload.sub });
+    if (user) req.user = stripUser(user);
+  } catch {
+    /* Guest tracking still works when a stale token is present. */
+  }
+  next();
+}
+
 async function getCurrentUser(req, res, next) {
   const token = extractToken(req);
   if (!token) return res.status(401).json({ detail: "Not authenticated" });
@@ -584,7 +642,49 @@ const upload = multer({
   },
 });
 
-function handleUpload(subdir) {
+function listUploadedFiles(req) {
+  const files = [];
+  if (req.file) files.push(req.file);
+  if (Array.isArray(req.files)) files.push(...req.files);
+  else if (req.files && typeof req.files === "object") {
+    for (const list of Object.values(req.files)) {
+      if (Array.isArray(list)) files.push(...list);
+    }
+  }
+  return files;
+}
+
+/** Convert a saved upload to WebP. Case overlay PNGs never go through this. */
+async function compressIncomingImages(req) {
+  const settings = await getImageSettings();
+  if (!settings.image_compress_enabled) return;
+  for (const file of listUploadedFiles(req)) {
+    if (!file?.path) continue;
+    const result = await compressDiskImage(file.path, settings);
+    file.path = result.filePath;
+    file.filename = path.basename(result.filePath);
+    file.compressed = Boolean(result.compressed);
+    file.imageWidth = result.width || null;
+    file.imageHeight = result.height || null;
+  }
+}
+
+function afterDiskUpload(req, res, next) {
+  compressIncomingImages(req)
+    .then(() => next())
+    .catch(async (err) => {
+      await Promise.all(listUploadedFiles(req).map((file) => (
+        file?.path ? fs.promises.unlink(file.path).catch(() => {}) : null
+      )));
+      if (err instanceof ImageInputError) {
+        return res.status(400).json({ detail: err.message });
+      }
+      console.error("Image compression failed");
+      return res.status(500).json({ detail: "Could not process image" });
+    });
+}
+
+function handleUpload(subdir, { compress = true } = {}) {
   return (req, res, next) => {
     req.uploadSubdir = subdir;
     upload.single("file")(req, res, (err) => {
@@ -593,7 +693,9 @@ function handleUpload(subdir) {
         const status = msg === "Unsupported file type" || msg.includes("File too large") ? 400 : 500;
         return res.status(status).json({ detail: msg });
       }
-      next();
+      // Customer artwork and the edited case preview stay at the original file.
+      if (!compress) return next();
+      afterDiskUpload(req, res, next);
     });
   };
 }
@@ -661,7 +763,7 @@ function optionalCatalogUpload(subdir) {
           const status = msg === "Unsupported file type" || msg.includes("File too large") ? 400 : 500;
           return res.status(status).json({ detail: msg });
         }
-        next();
+        afterDiskUpload(req, res, next);
       });
     }
     next();
@@ -715,7 +817,7 @@ function handleTemplateProductUpload(req, res, next) {
       const status = msg === "Unsupported file type" || msg.includes("File too large") ? 400 : 500;
       return res.status(status).json({ detail: msg });
     }
-    next();
+    afterDiskUpload(req, res, next);
   });
 }
 
@@ -738,6 +840,38 @@ const galleryMemoryUpload = multer({
   },
 });
 
+const COMPRESSED_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const COMPRESSED_UPLOAD_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+const COMPRESSED_UPLOAD_EXT = new Set(["jpg", "jpeg", "png", "webp"]);
+
+const compressedImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: COMPRESSED_UPLOAD_MAX_BYTES, files: 1 },
+  fileFilter(req, file, cb) {
+    const ext = String(file.originalname || "").split(".").pop().toLowerCase();
+    const mime = String(file.mimetype || "").toLowerCase();
+    if (!COMPRESSED_UPLOAD_EXT.has(ext) || !COMPRESSED_UPLOAD_MIME.has(mime)) {
+      return cb(new ImageInputError("Only JPG, PNG, and WebP images are allowed."));
+    }
+    cb(null, true);
+  },
+});
+
+function handleCompressedUpload(req, res, next) {
+  compressedImageUpload.single("image")(req, res, (err) => {
+    if (err) return next(err);
+    next();
+  });
+}
+
+function kilobytes(bytes) {
+  return Math.round((bytes / 1024) * 10) / 10;
+}
+
+function publicUploadPath(filename) {
+  return `/uploads/${filename}`;
+}
+
 function handleGalleryUpload(req, res, next) {
   galleryMemoryUpload.array("images", GALLERY_MAX_IMAGES)(req, res, (err) => {
     if (err) {
@@ -752,8 +886,9 @@ function handleGalleryUpload(req, res, next) {
 function templateProductImagePathFromUrl(imageUrl) {
   if (!imageUrl) return null;
   const match = String(imageUrl).match(/uploads\/template-products\/([^/?#]+)/);
-  if (!match) return null;
-  return path.join(UPLOAD_DIR, "template-products", match[1]);
+  const filename = safeUploadFilename(match?.[1]);
+  if (!filename) return null;
+  return path.join(UPLOAD_DIR, "template-products", filename);
 }
 
 function deleteTemplateProductImageFile(imageUrl) {
@@ -764,6 +899,26 @@ function deleteTemplateProductImageFile(imageUrl) {
     } catch {
       /* ignore */
     }
+  }
+}
+
+/** Delete an upload only when no other template product still references that file. */
+async function releaseTemplateProductImageFile(imageUrl, excludeIds) {
+  const query = templateProductMediaReferenceQuery(imageUrl, excludeIds);
+  if (query) {
+    const shared = await db.collection("template_products").findOne(query, { projection: { _id: 1 } });
+    if (shared) return;
+  }
+  deleteTemplateProductImageFile(imageUrl);
+}
+
+async function releaseTemplateProductMedia(item, excludeIds) {
+  const seen = new Set();
+  for (const url of collectTemplateProductMediaUrls(item)) {
+    const key = templateProductUploadFilename(url) || url;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await releaseTemplateProductImageFile(url, excludeIds);
   }
 }
 
@@ -778,6 +933,92 @@ function collectUploadedTemplateImages(req) {
     }
   }
   return urls;
+}
+
+async function loadCaseTypeLabelMap() {
+  const [cases, products] = await Promise.all([
+    db.collection("case_types").find({}, { projection: { slug: 1, name: 1 } }).toArray(),
+    db.collection("products").find({}, { projection: { slug: 1, name: 1 } }).toArray(),
+  ]);
+  const map = {};
+  for (const item of products) {
+    const slug = String(item.slug || "").trim().toLowerCase();
+    if (slug) map[slug] = { label: item.name || slug };
+  }
+  for (const item of cases) {
+    const slug = String(item.slug || "").trim().toLowerCase();
+    if (slug) map[slug] = { label: item.name || map[slug]?.label || slug };
+  }
+  return map;
+}
+
+async function groupedPublicListings(filter, sort, { page, limit, maxScan = 2000, expandGroups = true } = {}) {
+  const [docs, labelMap] = await Promise.all([
+    db.collection("template_products")
+      .find(filter, { projection: { _id: 0 } })
+      .sort(sort)
+      .limit(maxScan)
+      .toArray(),
+    loadCaseTypeLabelMap(),
+  ]);
+  const groups = groupProductsForListing(docs);
+  if (expandGroups) {
+    const designIds = [...new Set(groups.map((group) => group.design_id).filter(Boolean))];
+    if (designIds.length) {
+      const siblings = await db.collection("template_products")
+        .find(publishedShopClause({ design_id: { $in: designIds } }), { projection: { _id: 0 } })
+        .toArray();
+      const byDesign = new Map();
+      for (const sibling of siblings) {
+        const list = byDesign.get(sibling.design_id) || [];
+        list.push(sibling);
+        byDesign.set(sibling.design_id, list);
+      }
+      for (const group of groups) {
+        if (group.design_id && byDesign.has(group.design_id)) {
+          group.members = byDesign.get(group.design_id);
+        }
+      }
+    }
+  }
+  const listings = groups
+    .map((group) => toPublicListingProduct(group, labelMap))
+    .filter(Boolean);
+  return paginateList(listings, page, limit);
+}
+
+async function loadDesignSiblings(product, { publishedOnly = false } = {}) {
+  const designId = String(product?.design_id || "").trim();
+  if (!designId) return product ? [product] : [];
+  const filter = publishedOnly
+    ? publishedShopClause({ design_id: designId })
+    : { design_id: designId, ...notTrashedClause() };
+  const siblings = await db.collection("template_products")
+    .find(filter, { projection: { _id: 0 } })
+    .sort({ created_at: 1 })
+    .toArray();
+  return siblings.length ? siblings : (product ? [product] : []);
+}
+
+async function ensureDesignId(product) {
+  const existing = String(product?.design_id || "").trim();
+  if (existing) return existing;
+  const designId = crypto.randomUUID();
+  await db.collection("template_products").updateOne(
+    { id: product.id },
+    { $set: { design_id: designId, updated_at: nowIso() } }
+  );
+  product.design_id = designId;
+  return designId;
+}
+
+function adminProductPayload(doc) {
+  if (!doc) return doc;
+  return {
+    ...doc,
+    title: displayTemplateTitle(doc.title),
+    variants: resolveVariantInventory(doc),
+  };
 }
 
 async function ensureUniqueTemplateSlug(baseSlug, excludeId = null) {
@@ -819,9 +1060,20 @@ validateStartupSecrets();
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 
 const corsOrigins = parseCorsOrigins();
+// Dev: the site is opened as localhost or 127.0.0.1. Allow both.
+if (!isProd && Array.isArray(corsOrigins)) {
+  for (const origin of [...corsOrigins]) {
+    const swapped = origin.includes("://localhost")
+      ? origin.replace("://localhost", "://127.0.0.1")
+      : origin.includes("://127.0.0.1")
+        ? origin.replace("://127.0.0.1", "://localhost")
+        : origin;
+    if (swapped !== origin && !corsOrigins.includes(swapped)) corsOrigins.push(swapped);
+  }
+}
 app.use(
   cors({
-    origin: corsOrigins || true,
+    origin: corsOrigins || (isProd ? false : true),
     credentials: true,
     exposedHeaders: ["Content-Disposition", "X-Export-Count"],
   })
@@ -830,6 +1082,8 @@ app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: isProd ? undefined : false,
+    // HSTS on http://localhost makes browsers force https and the site looks offline.
+    hsts: isProd ? undefined : false,
   })
 );
 app.use(cookieParser());
@@ -848,6 +1102,14 @@ app.use("/api/uploads", express.static(UPLOAD_DIR, {
   dotfiles: "deny",
   index: false,
 }));
+// Long-cache the WebP files written by /api/upload. Names are UUIDs, so they never change.
+app.use("/uploads", express.static(UPLOAD_DIR, {
+  dotfiles: "deny",
+  index: false,
+  setHeaders(res) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  },
+}));
 app.use("/api", apiRateLimiter);
 
 async function getMainSettings() {
@@ -857,6 +1119,18 @@ async function getMainSettings() {
     await db.collection("settings").insertOne(s);
   }
   return s;
+}
+
+async function getImageSettings() {
+  return resolveImageSettings(await getMainSettings());
+}
+
+async function storePreparedUpload(buffer, settings, destDir) {
+  const prepared = await prepareUpload(buffer, settings);
+  const filename = `${crypto.randomUUID()}.${prepared.ext}`;
+  await fs.promises.mkdir(destDir, { recursive: true });
+  await fs.promises.writeFile(path.join(destDir, filename), prepared.buffer);
+  return { filename, prepared };
 }
 
 async function assertOrderAccess(req, order) {
@@ -1109,7 +1383,12 @@ api.patch("/profile", getCurrentUser, async (req, res) => {
 });
 
 api.post("/auth/logout", (req, res) => {
-  res.clearCookie("access_token", { path: "/" });
+  res.clearCookie("access_token", {
+    path: "/",
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+  });
   res.json({ ok: true });
 });
 
@@ -1493,9 +1772,12 @@ api.delete("/products/:product_id", getCurrentAdmin, async (req, res) => {
 });
 
 // --- Uploads ---
-api.post("/upload/design", uploadRateLimiter, handleUpload("designs"), (req, res) => {
+api.post("/upload/design", uploadRateLimiter, handleUpload("designs", { compress: false }), (req, res) => {
   if (!req.file) return res.status(400).json({ detail: "No file uploaded" });
-  res.json({ url: publicUrl(`uploads/designs/${req.file.filename}`) });
+  res.json({
+    url: publicUrl(`uploads/designs/${req.file.filename}`),
+    compressed: false,
+  });
 });
 
 api.post("/upload/payment", uploadRateLimiter, getCurrentUser, async (req, res, next) => {
@@ -1511,9 +1793,88 @@ api.post("/upload/payment", uploadRateLimiter, getCurrentUser, async (req, res, 
   res.json({ url: publicUrl(`uploads/payments/${req.file.filename}`) });
 });
 
-api.post("/upload/preview", uploadRateLimiter, handleUpload("designs"), (req, res) => {
+api.post("/upload/preview", uploadRateLimiter, handleUpload("designs", { compress: false }), (req, res) => {
   if (!req.file) return res.status(400).json({ detail: "No file uploaded" });
-  res.json({ url: publicUrl(`uploads/designs/${req.file.filename}`) });
+  res.json({
+    url: publicUrl(`uploads/designs/${req.file.filename}`),
+    compressed: false,
+  });
+});
+
+// Compressed WebP upload. The stored name is always a UUID — never the client filename.
+// Browser compression is optional; this route still converts because clients can skip it.
+api.post("/upload", uploadRateLimiter, getCurrentUser, handleCompressedUpload, async (req, res) => {
+  if (!req.file) return res.status(400).json({ detail: "No image uploaded" });
+
+  try {
+    const settings = await getImageSettings();
+    const stored = await storePreparedUpload(req.file.buffer, settings, UPLOAD_DIR);
+    res.json({
+      url: publicUploadPath(stored.filename),
+      originalKB: kilobytes(req.file.buffer.length),
+      webpKB: stored.prepared.compressed ? kilobytes(stored.prepared.buffer.length) : null,
+      compressed: stored.prepared.compressed,
+      width: stored.prepared.width,
+      height: stored.prepared.height,
+      variants: null,
+    });
+  } catch (err) {
+    if (err instanceof ImageInputError) {
+      return res.status(400).json({ detail: err.message });
+    }
+    console.error("Image upload failed");
+    return res.status(500).json({ detail: "Could not process image" });
+  }
+});
+
+// Same pipeline as /upload, plus thumb / medium / large variants.
+api.post("/products/:id/image", uploadRateLimiter, getCurrentAdmin, handleCompressedUpload, async (req, res) => {
+  if (!req.file) return res.status(400).json({ detail: "No image uploaded" });
+
+  const product = await db.collection("products").findOne({ id: req.params.id }, { projection: { id: 1 } });
+  if (!product) return res.status(404).json({ detail: "Product not found" });
+
+  const baseName = crypto.randomUUID();
+  try {
+    const settings = await getImageSettings();
+    if (!settings.image_compress_enabled) {
+      const stored = await storePreparedUpload(req.file.buffer, settings, UPLOAD_DIR);
+      return res.json({
+        url: publicUploadPath(stored.filename),
+        originalKB: kilobytes(req.file.buffer.length),
+        webpKB: null,
+        compressed: false,
+        width: stored.prepared.width,
+        height: stored.prepared.height,
+        variants: null,
+      });
+    }
+    const filenames = await createVariants(req.file.buffer, baseName, UPLOAD_DIR, settings);
+    const variants = {
+      thumb: publicUploadPath(filenames.thumb),
+      medium: publicUploadPath(filenames.medium),
+      large: publicUploadPath(filenames.large),
+    };
+    const largeStat = await fs.promises.stat(path.join(UPLOAD_DIR, filenames.large));
+
+    // Save the paths in the database, for example a product_images table:
+    //   id, product_id, thumb, medium, large, created_at
+    // INSERT INTO product_images (id, product_id, thumb, medium, large, created_at)
+    // VALUES (:id, :product_id, :thumb, :medium, :large, :created_at);
+
+    res.json({
+      url: variants.large,
+      originalKB: kilobytes(req.file.buffer.length),
+      webpKB: kilobytes(largeStat.size),
+      variants,
+    });
+  } catch (err) {
+    if (err instanceof ImageInputError) {
+      return res.status(400).json({ detail: err.message });
+    }
+    console.error("Product image upload failed");
+    return res.status(500).json({ detail: "Could not process image" });
+  }
 });
 
 // --- Templates ---
@@ -1638,6 +1999,17 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
   if (printAreaResult.error) return res.status(400).json({ detail: printAreaResult.error });
   const zoneResult = parseExclusionZonesInput(req.body);
   if (zoneResult.error) return res.status(400).json({ detail: zoneResult.error });
+
+  if (req.file) {
+    const overlay = await assertOverlayPng(req.file.path, {
+      width: dims.canvas_width,
+      height: dims.canvas_height,
+    });
+    if (overlay.error) {
+      await fs.promises.unlink(req.file.path).catch(() => {});
+      return res.status(400).json({ detail: overlay.error });
+    }
+  }
 
   const existing = isDefault
     ? await db.collection("templates").findOne({ is_default: true })
@@ -2178,40 +2550,24 @@ api.get("/shop/templates/meta", async (_req, res) => {
 api.get("/shop/templates/featured", async (req, res) => {
   const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 10));
   const filter = buildListFilter({ ...req.query, status: "published", featured: "true" });
-  const items = await db.collection("template_products")
-    .find(filter, { projection: { _id: 0 } })
-    .sort({ created_at: -1 })
-    .limit(limit)
-    .toArray();
+  const paged = await groupedPublicListings(filter, { created_at: -1 }, { page: 1, limit, expandGroups: true });
   res.set("Cache-Control", "no-store");
-  res.json(items.map(toPublicProduct).filter(Boolean));
+  res.json(paged.items);
 });
 
 api.get("/shop/templates", async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(48, Math.max(1, Number(req.query.limit) || 12));
-  const skip = (page - 1) * limit;
   const filter = buildListFilter({ ...req.query, status: "published" });
   const sort = buildSort(req.query);
-
-  const [items, total] = await Promise.all([
-    db.collection("template_products")
-      .find(filter, { projection: { _id: 0 } })
-      .sort(sort)
-      .skip(skip)
-      .limit(limit)
-      .toArray(),
-    db.collection("template_products").countDocuments(filter),
-  ]);
-
-  res.set("Cache-Control", "no-store");
-  res.json({
-    items: items.map(toPublicProduct).filter(Boolean),
+  const paged = await groupedPublicListings(filter, sort, {
     page,
     limit,
-    total,
-    pages: Math.ceil(total / limit) || 1,
+    expandGroups: !req.query.case_type,
   });
+
+  res.set("Cache-Control", "no-store");
+  res.json(paged);
 });
 
 api.get("/shop/templates/:slug", async (req, res) => {
@@ -2221,26 +2577,43 @@ api.get("/shop/templates/:slug", async (req, res) => {
   );
   if (!item) return res.status(404).json({ detail: "Template not found" });
 
-  const relatedFilter = {
-    $and: [
-      publishedShopClause({ id: { $ne: item.id } }),
-      {
-        $or: [
-          { category: item.category },
-          { collection: item.collection },
-          { phone_brand: item.phone_brand },
+  const [siblings, labelMap, relatedDocs] = await Promise.all([
+    loadDesignSiblings(item, { publishedOnly: true }),
+    loadCaseTypeLabelMap(),
+    db.collection("template_products")
+      .find({
+        $and: [
+          publishedShopClause({ id: { $ne: item.id } }),
+          item.design_id ? { $nor: [{ design_id: item.design_id }] } : {},
+          {
+            $or: [
+              { category: item.category },
+              { collection: item.collection },
+              { phone_brand: item.phone_brand },
+            ],
+          },
         ],
-      },
-    ],
-  };
-  const related = await db.collection("template_products")
-    .find(relatedFilter, { projection: { _id: 0 } })
-    .sort({ created_at: -1 })
-    .limit(8)
-    .toArray();
+      }, { projection: { _id: 0 } })
+      .sort({ created_at: -1 })
+      .limit(24)
+      .toArray(),
+  ]);
 
+  const related = groupProductsForListing(relatedDocs)
+    .map((group) => toPublicListingProduct(group, labelMap))
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const publicItem = toPublicProduct(item);
   res.set("Cache-Control", "no-store");
-  res.json({ ...toPublicProduct(item), related: related.map(toPublicProduct).filter(Boolean) });
+  res.json({
+    ...publicItem,
+    design_id: item.design_id || null,
+    material_variants: siblings
+      .map((sibling) => toPublicMaterialVariant(sibling, item, labelMap))
+      .filter(Boolean),
+    related,
+  });
 });
 
 api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
@@ -2263,7 +2636,11 @@ api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
   ]);
 
   res.json({
-    items: items.map((i) => ({ ...i, title: displayTemplateTitle(i.title) })),
+    items: items.map((i) => ({
+      ...i,
+      title: displayTemplateTitle(i.title),
+      variants: resolveVariantInventory(i),
+    })),
     page,
     limit,
     total,
@@ -2326,7 +2703,7 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
 
   if (uploaded.length) {
     if (req.files?.thumbnail?.[0]) {
-      deleteTemplateProductImageFile(existing.thumbnail);
+      await releaseTemplateProductImageFile(existing.thumbnail, existing.id);
       thumbnail = uploaded[0];
       images = [thumbnail, ...images.filter((u) => u !== existing.thumbnail), ...uploaded.slice(1)];
     } else {
@@ -2339,7 +2716,7 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
       const toRemove = JSON.parse(req.body.remove_images);
       if (Array.isArray(toRemove)) {
         for (const url of toRemove) {
-          deleteTemplateProductImageFile(url);
+          await releaseTemplateProductImageFile(url, existing.id);
         }
         images = images.filter((u) => !toRemove.includes(u));
         if (!images.includes(thumbnail)) thumbnail = images[0] || null;
@@ -2362,7 +2739,209 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
     { id: existing.id },
     { projection: { _id: 0 } }
   );
-  res.json(saved);
+  res.json({ ...saved, variants: resolveVariantInventory(saved) });
+});
+
+api.patch("/admin/template-products/:id/variants/:variantId", getCurrentAdmin, async (req, res) => {
+  const existing = await db.collection("template_products").findOne({ id: req.params.id });
+  if (!existing) return res.status(404).json({ detail: "Template product not found" });
+  if (isTrashed(existing)) {
+    return res.status(400).json({ detail: "Restore the product from trash before editing" });
+  }
+
+  const result = applyVariantInventoryUpdate(existing, req.params.variantId, {
+    stock_quantity: req.body?.stock_quantity,
+    is_out_of_stock: req.body?.is_out_of_stock,
+  });
+  if (result.error) return res.status(400).json({ detail: result.error });
+
+  await db.collection("template_products").updateOne(
+    { id: existing.id },
+    {
+      $set: {
+        variant_inventory: result.variant_inventory,
+        stock: result.stock,
+        updated_at: nowIso(),
+      },
+    }
+  );
+  const saved = await db.collection("template_products").findOne(
+    { id: existing.id },
+    { projection: { _id: 0 } }
+  );
+  res.json({
+    ...saved,
+    title: displayTemplateTitle(saved.title),
+    variants: resolveVariantInventory(saved),
+  });
+});
+
+api.get("/admin/template-products/:id/material-variants", getCurrentAdmin, async (req, res) => {
+  const existing = await db.collection("template_products").findOne(
+    { id: req.params.id },
+    { projection: { _id: 0 } }
+  );
+  if (!existing) return res.status(404).json({ detail: "Template product not found" });
+  const siblings = await loadDesignSiblings(existing);
+  res.json({
+    design_id: existing.design_id || null,
+    items: siblings.map(adminProductPayload),
+  });
+});
+
+api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, async (req, res) => {
+  const existing = await db.collection("template_products").findOne({ id: req.params.id });
+  if (!existing) return res.status(404).json({ detail: "Template product not found" });
+  if (isTrashed(existing)) {
+    return res.status(400).json({ detail: "Restore the product from trash before adding a material" });
+  }
+
+  const caseTypeDocs = await db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray();
+  const allowedCaseTypes = caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()).filter(Boolean);
+  const case_type = String(req.body?.case_type || "").trim().toLowerCase();
+  if (!case_type) return res.status(400).json({ detail: "Case type is required" });
+  if (allowedCaseTypes.length && !allowedCaseTypes.includes(case_type)) {
+    return res.status(400).json({ detail: `case_type must be one of: ${allowedCaseTypes.join(", ")}` });
+  }
+
+  const siblings = await loadDesignSiblings(existing);
+  const duplicate = findDuplicateCaseType(siblings, case_type);
+  if (duplicate) {
+    return res.status(400).json({ detail: "This design already has that material" });
+  }
+
+  const price = Number(req.body?.price);
+  if (!Number.isFinite(price) || price <= 0) {
+    return res.status(400).json({ detail: "Valid price is required" });
+  }
+
+  const saleRaw = req.body?.sale_price;
+  const sale_price = saleRaw == null || saleRaw === "" ? null : Number(saleRaw);
+  if (sale_price != null && (!Number.isFinite(sale_price) || sale_price < 0)) {
+    return res.status(400).json({ detail: "sale_price must be a number that is 0 or greater" });
+  }
+
+  const stockOverride = req.body?.stock;
+  let variant_inventory = resolveVariantInventory(existing);
+  let stock = Math.max(0, Math.floor(Number(existing.stock) || 0));
+  if (stockOverride != null && stockOverride !== "") {
+    const nextStock = Math.max(0, Math.floor(Number(stockOverride) || 0));
+    variant_inventory = synthesizeVariantInventory(existing.phone_models || [], nextStock);
+    stock = availableStock(variant_inventory) || nextStock;
+  }
+
+  const designId = await ensureDesignId(existing);
+  const slug = await ensureUniqueTemplateSlug(
+    `${existing.slug}-${case_type.replace(/-case$/, "")}`
+  );
+  const ts = nowIso();
+  const item = {
+    id: crypto.randomUUID(),
+    title: existing.title,
+    slug,
+    product_type: existing.product_type,
+    description: String(req.body?.description || existing.description || "").trim(),
+    short_description: String(req.body?.short_description || existing.short_description || "").trim().slice(0, 300),
+    phone_brand: existing.phone_brand,
+    phone_models: Array.isArray(existing.phone_models) ? existing.phone_models : [],
+    category: existing.category,
+    collection: existing.collection,
+    case_type,
+    material: String(req.body?.material || "").trim(),
+    price,
+    sale_price: Number.isFinite(sale_price) && sale_price > 0 ? sale_price : null,
+    stock,
+    variant_inventory,
+    sku: String(req.body?.sku || "").trim().slice(0, 64) || null,
+    tags: Array.isArray(existing.tags) ? existing.tags : [],
+    featured: false,
+    best_seller: Boolean(existing.best_seller),
+    new_arrival: Boolean(existing.new_arrival),
+    status: req.body?.status === "draft" ? "draft" : "published",
+    rating: existing.rating,
+    review_count: existing.review_count,
+    seo: existing.seo || {},
+    thumbnail: existing.thumbnail,
+    images: Array.isArray(existing.images) ? existing.images : [],
+    design_id: designId,
+    order_count: 0,
+    created_at: ts,
+    updated_at: ts,
+  };
+  await db.collection("template_products").insertOne(item);
+  const siblingsAfter = await loadDesignSiblings(item);
+  res.json({
+    item: adminProductPayload(item),
+    design_id: designId,
+    items: siblingsAfter.map(adminProductPayload),
+  });
+});
+
+api.post("/admin/template-products/:id/link-design", getCurrentAdmin, async (req, res) => {
+  const existing = await db.collection("template_products").findOne({ id: req.params.id });
+  if (!existing) return res.status(404).json({ detail: "Template product not found" });
+  if (isTrashed(existing)) {
+    return res.status(400).json({ detail: "Restore the product from trash before linking a material" });
+  }
+
+  const targetId = String(req.body?.product_id || "").trim();
+  if (!targetId || targetId === existing.id) {
+    return res.status(400).json({ detail: "Select a different product to link" });
+  }
+  const target = await db.collection("template_products").findOne({ id: targetId });
+  if (!target) return res.status(404).json({ detail: "Product to link was not found" });
+  if (isTrashed(target)) {
+    return res.status(400).json({ detail: "Restore the other product from trash before linking it" });
+  }
+  if (String(target.design_id || "").trim()) {
+    return res.status(400).json({ detail: "That product is already part of a design group" });
+  }
+
+  const siblings = await loadDesignSiblings(existing);
+  const duplicate = findDuplicateCaseType([...siblings, target], target.case_type, target.id);
+  if (duplicate) {
+    return res.status(400).json({ detail: "This design already has that material" });
+  }
+
+  const designId = await ensureDesignId(existing);
+  await db.collection("template_products").updateOne(
+    { id: target.id },
+    { $set: { design_id: designId, updated_at: nowIso() } }
+  );
+  const saved = await db.collection("template_products").findOne({ id: target.id }, { projection: { _id: 0 } });
+  const siblingsAfter = await loadDesignSiblings({ ...existing, design_id: designId });
+  res.json({
+    item: adminProductPayload(saved),
+    design_id: designId,
+    items: siblingsAfter.map(adminProductPayload),
+  });
+});
+
+api.post("/admin/template-products/:id/unlink-design", getCurrentAdmin, async (req, res) => {
+  const existing = await db.collection("template_products").findOne({ id: req.params.id });
+  if (!existing) return res.status(404).json({ detail: "Template product not found" });
+  const designId = String(existing.design_id || "").trim();
+  if (!designId) return res.json({ ok: true, design_id: null, items: [adminProductPayload(existing)] });
+
+  await db.collection("template_products").updateOne(
+    { id: existing.id },
+    { $unset: { design_id: "" }, $set: { updated_at: nowIso() } }
+  );
+  const remaining = await db.collection("template_products").countDocuments({
+    design_id: designId,
+    ...notTrashedClause(),
+  });
+  if (remaining <= 1) {
+    await db.collection("template_products").updateMany(
+      { design_id: designId },
+      { $unset: { design_id: "" }, $set: { updated_at: nowIso() } }
+    );
+  }
+  const saved = await db.collection("template_products").findOne(
+    { id: existing.id },
+    { projection: { _id: 0 } }
+  );
+  res.json({ ok: true, design_id: null, items: [adminProductPayload(saved)] });
 });
 
 api.delete("/admin/template-products/:id", getCurrentAdmin, async (req, res) => {
@@ -2371,8 +2950,7 @@ api.delete("/admin/template-products/:id", getCurrentAdmin, async (req, res) => 
   if (!isTrashed(item)) {
     return res.status(400).json({ detail: "Move the product to trash before permanently deleting it" });
   }
-  for (const url of item.images || []) deleteTemplateProductImageFile(url);
-  if (item.thumbnail) deleteTemplateProductImageFile(item.thumbnail);
+  await releaseTemplateProductMedia(item, item.id);
   const result = await db.collection("template_products").deleteOne({ id: req.params.id });
   if (result.deletedCount === 0) {
     return res.status(404).json({ detail: "Template product not found" });
@@ -2453,10 +3031,15 @@ api.post("/admin/template-products/:id/duplicate", getCurrentAdmin, async (req, 
     order_count,
     trashed_at,
     trashed_from_status,
+    design_id,
     ...rest
   } = source;
+  const media = cloneTemplateProductMedia(rest, { uploadDir: UPLOAD_DIR });
   const item = {
     ...rest,
+    thumbnail: media.thumbnail,
+    images: media.images,
+    seo: media.seo,
     id: crypto.randomUUID(),
     title,
     slug,
@@ -2534,9 +3117,9 @@ api.post("/admin/template-products/bulk", getCurrentAdmin, async (req, res) => {
       id: { $in: ids },
       ...trashedClause(),
     }).toArray();
+    const purgeIds = items.map((item) => item.id);
     for (const item of items) {
-      for (const url of item.images || []) deleteTemplateProductImageFile(url);
-      if (item.thumbnail) deleteTemplateProductImageFile(item.thumbnail);
+      await releaseTemplateProductMedia(item, purgeIds);
     }
     const result = await db.collection("template_products").deleteMany({
       id: { $in: items.map((i) => i.id) },
@@ -2634,9 +3217,13 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
       quantity: item.quantity || 1,
       price: item.price,
       template_product_id: item.template_product_id || null,
+      template_product_title: item.template_product_title || null,
       template_id: item.template_id || null,
       design_transform: item.design_transform || null,
       case_color: item.case_color || null,
+      case_type: item.case_type || null,
+      case_type_label: item.case_type_label || null,
+      material: item.material || null,
     }));
   }
 
@@ -2647,9 +3234,6 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     );
     if (!templateProduct) {
       return res.status(404).json({ detail: "Template product not found or unavailable" });
-    }
-    if (templateProduct.stock <= 0) {
-      return res.status(400).json({ detail: "This template is out of stock" });
     }
     if (!body.design_url) {
       body.design_url = templateProduct.thumbnail || (templateProduct.images && templateProduct.images[0]);
@@ -2673,32 +3257,45 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     return res.status(err.status || 400).json({ detail: err.message });
   }
 
+  const caseTypeDocs = await db.collection("case_types")
+    .find({}, { projection: { slug: 1, name: 1 } })
+    .toArray();
+  const caseTypeLabels = buildCaseTypeLabelMap(caseTypeDocs);
+
   if (isMultiItem) {
-    orderItems = pricedOrder.lines.map((line) => ({
-      brand_id: line.brand.id,
-      brand_name: line.brand.name,
-      model_id: line.model.id,
-      model_name: line.model.name,
-      product_id: line.product.id,
-      product_name: line.product.name,
-      design_url: line.design_url,
-      preview_url: line.preview_url,
-      quantity: line.quantity,
-      price: line.price,
-      template_product_id: line.template_product_id || null,
-      template_id: line.template_id || null,
-      design_transform: line.design_transform || null,
-      case_color: line.case_color || null,
-    }));
+    orderItems = pricedOrder.lines.map((line) => {
+      const materialSnap = snapshotOrderMaterial(line, caseTypeLabels);
+      return {
+        brand_id: line.brand.id,
+        brand_name: line.brand.name,
+        model_id: line.model.id,
+        model_name: line.model.name,
+        product_id: line.product.id,
+        product_name: line.product.name,
+        design_url: line.design_url,
+        preview_url: line.preview_url,
+        quantity: line.quantity,
+        price: line.price,
+        template_product_id: line.template_product_id || null,
+        template_product_title: line.templateProduct?.title || line.template_product_title || null,
+        template_id: line.template_id || null,
+        design_transform: line.design_transform || null,
+        case_color: line.case_color || null,
+        ...materialSnap,
+      };
+    });
     // Always persist selected device on the order root from the priced line
     // (client-selected Brand/Model from Buy Now / cart — never template defaults alone)
     const first = pricedOrder.lines[0];
+    const firstMaterial = snapshotOrderMaterial(first, caseTypeLabels);
     body.brand_id = first.brand.id;
     body.brand_name = first.brand.name;
     body.model_id = first.model.id;
     body.model_name = first.model.name;
     body.product_id = first.product.id;
     body.product_name = first.product.name;
+    body.template_product_title = first.templateProduct?.title || first.template_product_title || null;
+    Object.assign(body, firstMaterial);
     if (first.template_product_id) body.template_product_id = first.template_product_id;
     if (first.design_url) body.design_url = first.design_url;
     if (first.preview_url) body.preview_url = first.preview_url;
@@ -2712,6 +3309,8 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     body.product_id = line.product.id;
     body.product_name = line.product.name;
     body.price = line.price;
+    body.template_product_title = line.templateProduct?.title || body.template_product_title || null;
+    Object.assign(body, snapshotOrderMaterial(line, caseTypeLabels));
     if (body.case_color == null && line.case_color != null) {
       body.case_color = line.case_color;
     }
@@ -2763,11 +3362,33 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
   const settings = await getMainSettings();
   const paymentMethod = normalizePaymentMethod(settings.payment_method);
 
+  const mediaError = [body.design_url, body.preview_url]
+    .concat((orderItems || []).flatMap((item) => [item.design_url, item.preview_url]))
+    .map((url) => (url ? (isValidUploadUrl(url) ? null : "Invalid image URL") : null))
+    .find(Boolean);
+  if (mediaError) {
+    return res.status(400).json({ detail: mediaError });
+  }
+
+  const clientOrder = {};
+  for (const key of [
+    "customer_name", "phone", "email", "notes",
+    "house_no_flat", "building_name", "street", "landmark", "country",
+    "state", "district", "city_area", "post_office", "pincode",
+    "address", "formatted_address",
+    "brand_id", "brand_name", "model_id", "model_name",
+    "product_id", "product_name", "design_url", "preview_url",
+    "design_transform", "template_id", "template_product_id", "template_product_title",
+    "case_color", "case_type", "case_type_label", "material",
+  ]) {
+    if (body[key] !== undefined) clientOrder[key] = body[key];
+  }
+
   const order = {
+    ...clientOrder,
     id: crypto.randomUUID(),
     order_id: genOrderId(),
     user_id: req.user.id,
-    ...body,
     items: isMultiItem ? orderItems : null,
     subtotal,
     shipping_fee: SHIPPING_FEE,
@@ -2857,10 +3478,35 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
 
   await db.collection("orders").insertOne(order);
 
-  if (templateProduct) {
+  const stockLines = pricedOrder.lines.filter((line) => line.templateProduct);
+  const linesByProduct = new Map();
+  for (const line of stockLines) {
+    const bucket = linesByProduct.get(line.templateProduct.id) || [];
+    bucket.push(line);
+    linesByProduct.set(line.templateProduct.id, bucket);
+  }
+  for (const [productId, lines] of linesByProduct) {
+    let current = await db.collection("template_products").findOne({ id: productId });
+    if (!current) continue;
+    for (const line of lines) {
+      const next = consumeVariantStock(current, line.model.name, line.quantity);
+      if (next.error) continue;
+      current = {
+        ...current,
+        stock: next.stock,
+        variant_inventory: next.variant_inventory,
+      };
+    }
     await db.collection("template_products").updateOne(
-      { id: templateProduct.id },
-      { $inc: { stock: -1, order_count: 1 }, $set: { updated_at: nowIso() } }
+      { id: productId },
+      {
+        $set: {
+          stock: current.stock,
+          variant_inventory: current.variant_inventory,
+          updated_at: nowIso(),
+        },
+        $inc: { order_count: 1 },
+      }
     );
   }
 
@@ -2877,7 +3523,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     );
   }
 
-  res.json(order);
+  res.json(stripOrderSecrets(order));
 });
 
 api.get("/orders/mine", getCurrentUser, async (req, res) => {
@@ -2893,14 +3539,15 @@ api.get("/orders/mine", getCurrentUser, async (req, res) => {
   res.json(items.map((o) => stripOrderSecrets(o)));
 });
 
-api.get("/orders/:order_id", async (req, res) => {
+api.get("/orders/:order_id", attachUserIfPresent, async (req, res) => {
   if (!isValidOrderId(req.params.order_id)) {
     return res.status(400).json({ detail: "Invalid order ID" });
   }
   const o = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
   if (!o) return res.status(404).json({ detail: "Order not found" });
-  // Never expose HMAC signature to clients
-  res.json(decorateAdminOrder(o, stripOrderSecrets));
+  const full = decorateAdminOrder(o, stripOrderSecrets);
+  const canSeePrivate = req.user && (req.user.role === "admin" || (o.user_id && o.user_id === req.user.id));
+  res.json(canSeePrivate ? full : toPublicTrackingOrder(full));
 });
 
 api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => {
@@ -2941,7 +3588,7 @@ api.post("/orders/:order_id/payment-proof", getCurrentUser, async (req, res) => 
     }
   );
   const o2 = await db.collection("orders").findOne({ order_id: req.params.order_id }, { projection: { _id: 0 } });
-  res.json(o2);
+  res.json(stripOrderSecrets(o2));
 });
 
 api.post("/orders/:order_id/razorpay-order", getCurrentUser, async (req, res) => {
@@ -3200,20 +3847,19 @@ api.post("/webhooks/razorpay", async (req, res) => {
   }
 
   if (eventName === "payment.captured" && order && order.payment_status !== "approved") {
-    const expectedPaise = amountToPaise(order.amount);
     const paidAmount = Number(paymentEntity?.amount);
     const paidCurrency = String(paymentEntity?.currency || "").toUpperCase();
-    const amountOk = !Number.isFinite(paidAmount) || paidAmount === expectedPaise;
-    const currencyOk = !paidCurrency || paidCurrency === String(order.currency || "INR").toUpperCase();
+    const matches = capturedPaymentMatchesOrder(paymentEntity, order);
 
-    if (!amountOk || !currencyOk) {
+    if (!matches) {
       console.warn(
         JSON.stringify({
           type: "razorpay_webhook_amount_mismatch",
           order_id: order.order_id,
-          expected_paise: expectedPaise,
+          expected_paise: amountToPaise(order.amount),
           received_paise: paidAmount,
           currency: paidCurrency,
+          status: paymentEntity?.status || null,
           timestamp: nowIso(),
         })
       );
@@ -3495,7 +4141,12 @@ api.post("/gallery/submit", uploadRateLimiter, getCurrentUser, handleGalleryUplo
 
   let images;
   try {
-    images = await processGalleryImages(req.files, UPLOAD_DIR);
+    const imageSettings = await getImageSettings();
+    images = await processGalleryImages(req.files, UPLOAD_DIR, {
+      maxWidth: imageSettings.image_max_width,
+      quality: imageSettings.image_webp_quality,
+      targetKb: imageSettings.image_target_kb,
+    });
   } catch (err) {
     return res.status(400).json({ detail: err.message || "Image processing failed" });
   }
@@ -3576,7 +4227,12 @@ api.post("/admin/gallery", getCurrentAdmin, handleGalleryUpload, async (req, res
 
   let images;
   try {
-    images = await processGalleryImages(req.files, UPLOAD_DIR);
+    const imageSettings = await getImageSettings();
+    images = await processGalleryImages(req.files, UPLOAD_DIR, {
+      maxWidth: imageSettings.image_max_width,
+      quality: imageSettings.image_webp_quality,
+      targetKb: imageSettings.image_target_kb,
+    });
   } catch (err) {
     return res.status(400).json({ detail: err.message || "Image processing failed" });
   }
@@ -3681,18 +4337,25 @@ api.get("/settings", async (req, res) => {
 });
 
 api.put("/settings", getCurrentAdmin, async (req, res) => {
-  const update = sanitizeSettingsUpdate(req.body || {});
-  if (Object.keys(update).length === 0) {
-    return res.status(400).json({ detail: "No fields to update" });
+  try {
+    const imageUpdate = imageSettingsUpdateFromBody(req.body || {});
+    if (imageUpdate.error) return res.status(400).json({ detail: imageUpdate.error });
+    const update = { ...sanitizeSettingsUpdate(req.body || {}), ...imageUpdate.fields };
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ detail: "No fields to update" });
+    }
+    if (update.payment_method === "razorpay" && !isRazorpayConfigured()) {
+      return res.status(400).json({
+        detail: "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server env before enabling Razorpay",
+      });
+    }
+    await db.collection("settings").updateOne({ id: "main" }, { $set: update }, { upsert: true });
+    const s = await db.collection("settings").findOne({ id: "main" }, { projection: { _id: 0 } });
+    res.json(toPublicSettings(s));
+  } catch (err) {
+    console.error("Settings save failed:", err.message);
+    if (!res.headersSent) res.status(500).json({ detail: "Could not save settings" });
   }
-  if (update.payment_method === "razorpay" && !isRazorpayConfigured()) {
-    return res.status(400).json({
-      detail: "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server env before enabling Razorpay",
-    });
-  }
-  await db.collection("settings").updateOne({ id: "main" }, { $set: update }, { upsert: true });
-  const s = await db.collection("settings").findOne({ id: "main" }, { projection: { _id: 0 } });
-  res.json(toPublicSettings(s));
 });
 
 // --- Health ---
@@ -3701,6 +4364,24 @@ api.get("/", (req, res) => {
 });
 
 app.use("/api", api);
+
+// Multer errors from the compressed-image routes. Other errors keep the default handler.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ detail: "Image is too large. Maximum size is 10 MB." });
+    }
+    return res.status(400).json({ detail: "Invalid upload" });
+  }
+
+  if (err instanceof ImageInputError) {
+    return res.status(400).json({ detail: err.message });
+  }
+
+  return next(err);
+});
 
 async function ensureGoogleIdIndex(users) {
   const options = {
@@ -3765,6 +4446,7 @@ async function seed() {
   await db.collection("template_products").createIndex({ status: 1, phone_brand: 1 });
   await db.collection("template_products").createIndex({ status: 1, created_at: -1 });
   await db.collection("template_products").createIndex({ trashed_at: 1, created_at: -1 });
+  await db.collection("template_products").createIndex({ design_id: 1, status: 1 });
   await db.collection("customer_gallery").createIndex("id", { unique: true });
   await db.collection("customer_gallery").createIndex({ status: 1, hidden: 1, created_at: -1 });
   await db.collection("customer_gallery").createIndex({ order_id: 1 });
@@ -3892,6 +4574,11 @@ async function main() {
     console.error("Missing required env vars: MONGO_URL, DB_NAME, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD");
     process.exit(1);
   }
+  const configErrors = productionConfigErrors();
+  if (configErrors.length) {
+    console.error(`[security] Refusing to start in production:\n- ${configErrors.join("\n- ")}`);
+    process.exit(1);
+  }
 
   client = new MongoClient(MONGO_URL);
   await client.connect();
@@ -3900,21 +4587,39 @@ async function main() {
 
   await seed();
 
-  const HOST = process.env.HOST || "0.0.0.0";
-  app.listen(PORT, HOST, () => {
+  // On Windows, "localhost" is both 127.0.0.1 and ::1. Binding only one of
+  // them makes the browser report that the backend is not connected.
+  const requestedHost = process.env.HOST || "0.0.0.0";
+  const bindAll = ["0.0.0.0", "::", "localhost", "::1"].includes(requestedHost);
+
+  function logListening() {
     console.log(`CASEBOX API running on http://localhost:${PORT}`);
-    if (HOST === "0.0.0.0") {
-      const os = require("os");
-      const nets = os.networkInterfaces();
-      for (const name of Object.keys(nets)) {
-        for (const net of nets[name] || []) {
-          if (net.family === "IPv4" && !net.internal) {
-            console.log(`  LAN: http://${net.address}:${PORT}`);
-          }
+    const os = require("os");
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === "IPv4" && !net.internal) {
+          console.log(`  LAN: http://${net.address}:${PORT}`);
         }
       }
     }
-  });
+  }
+
+  if (bindAll) {
+    const ipv4 = app.listen(PORT, "0.0.0.0", logListening);
+    ipv4.on("error", (err) => {
+      console.error("Failed to bind IPv4:", err.message);
+      process.exit(1);
+    });
+    const ipv6 = app.listen(PORT, "::");
+    ipv6.on("error", (err) => {
+      console.warn("IPv6 bind skipped:", err.message);
+    });
+  } else {
+    app.listen(PORT, requestedHost, () => {
+      console.log(`CASEBOX API running on http://${requestedHost}:${PORT}`);
+    });
+  }
 }
 
 main().catch((err) => {

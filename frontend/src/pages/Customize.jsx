@@ -1,10 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { setDraft, getDraft, replaceDraft } from "../lib/draft";
+import {
+  CUSTOMIZE_STEP_KEYS,
+  buildCustomizeSearch,
+  canGoBackInHistory,
+  maxReachableStep,
+  parseCustomizeStep,
+} from "../lib/customizeNavigation";
 import { TemplateRenderer } from "../lib/caseTemplate";
 import CatalogImage from "../components/CatalogImage";
 import {
@@ -47,25 +55,27 @@ async function uploadEditedPreview(renderer, fallbackUrl) {
 
 export default function Customize() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const [step, setStep] = useState(0);
   const [brands, setBrands] = useState([]);
   const [models, setModels] = useState([]);
   const [products, setProducts] = useState([]);
-  const [brand, setBrand] = useState(null);
-  const [model, setModel] = useState(null);
-  const [product, setProduct] = useState(null);
+  const [brand, setBrand] = useState(() => getDraft().brand || null);
+  const [model, setModel] = useState(() => getDraft().model || null);
+  const [product, setProduct] = useState(() => getDraft().product || null);
+  const initialUrlSync = useRef(true);
+
+  const stepParam = searchParams.get("step");
+  const requestedStep = parseCustomizeStep(stepParam);
+  const step = Math.min(requestedStep, maxReachableStep(brand, model, product));
 
   useEffect(() => {
     api.get("/brands").then((r) => setBrands(r.data));
-    const d = getDraft();
-    if (d.brand) setBrand(d.brand);
-    if (d.model) setModel(d.model);
-    if (d.product) setProduct(d.product);
   }, []);
 
   useEffect(() => {
     if (brand) api.get(`/models?brand_id=${brand.id}`).then((r) => setModels(r.data));
+    else setModels([]);
   }, [brand]);
 
   useEffect(() => {
@@ -88,26 +98,76 @@ export default function Customize() {
     return () => { cancelled = true; };
   }, [brand, model]);
 
-  const next = () => setStep((s) => Math.min(3, s + 1));
-  const prev = () => setStep((s) => Math.max(0, s - 1));
+  // Canonicalize the step query param. Clamp unreachable steps only on first load
+  // (deep links). After that, never replace the URL on popstate — that would skip
+  // wizard steps and dump the user back to Shop/Home.
+  useLayoutEffect(() => {
+    const current = String(stepParam || "").trim().toLowerCase();
+    const targetIndex = initialUrlSync.current ? step : requestedStep;
+    initialUrlSync.current = false;
+    const canonical = CUSTOMIZE_STEP_KEYS[targetIndex];
+    if (current === canonical) return;
+    navigate({ search: buildCustomizeSearch(searchParams, targetIndex) }, { replace: true });
+  }, [step, requestedStep, stepParam, searchParams, navigate]);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [step]);
+
+  const goToStep = (index, { replace = false } = {}) => {
+    const nextIndex = Math.max(0, Math.min(CUSTOMIZE_STEP_KEYS.length - 1, index));
+    const canonical = CUSTOMIZE_STEP_KEYS[nextIndex];
+    const current = String(stepParam || "").trim().toLowerCase();
+    if (current === canonical) return;
+    navigate({ search: buildCustomizeSearch(searchParams, nextIndex) }, { replace });
+  };
+
+  const handleBack = () => {
+    if (canGoBackInHistory()) {
+      navigate(-1);
+      return;
+    }
+    if (step > 0) {
+      goToStep(step - 1, { replace: true });
+      return;
+    }
+    navigate("/");
+  };
+
+  const handleStepClick = (targetIndex) => {
+    if (targetIndex >= step || targetIndex < 0) return;
+    const delta = targetIndex - step;
+    const historyIndex = window.history.state?.idx;
+    if (typeof historyIndex === "number" && historyIndex + delta >= 0) {
+      navigate(delta);
+      return;
+    }
+    goToStep(targetIndex, { replace: true });
+  };
 
   const selectBrand = (b) => {
-    setBrand(b);
-    setModel(null);
-    setProduct(null);
+    flushSync(() => {
+      setBrand(b);
+      setModel(null);
+      setProduct(null);
+    });
     setDraft({ brand: b, model: null, product: null });
-    next();
+    goToStep(1);
   };
   const selectModel = (m) => {
-    setModel(m);
-    setProduct(null);
+    flushSync(() => {
+      setModel(m);
+      setProduct(null);
+    });
     setDraft({ model: m, product: null });
-    next();
+    goToStep(2);
   };
   const selectProduct = (p) => {
-    setProduct(p);
+    flushSync(() => {
+      setProduct(p);
+    });
     setDraft({ product: p });
-    next();
+    goToStep(3);
   };
 
   return (
@@ -116,7 +176,7 @@ export default function Customize() {
       <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
         <button
           type="button"
-          onClick={() => (step === 0 ? navigate("/") : prev())}
+          onClick={handleBack}
           className="inline-flex shrink-0 items-center gap-2 self-start text-sm leading-none text-white/60 hover:text-white"
           data-testid="back-btn"
         >
@@ -132,13 +192,23 @@ export default function Customize() {
                   aria-current={i === step ? "step" : undefined}
                   aria-hidden={i === step ? undefined : true}
                 />
-                <span
-                  className={`whitespace-nowrap font-mono text-[10px] uppercase tracking-widest sm:text-xs ${
-                    i === step ? "text-white" : "text-white/30"
-                  }`}
-                >
-                  {s}
-                </span>
+                {i < step ? (
+                  <button
+                    type="button"
+                    onClick={() => handleStepClick(i)}
+                    className="whitespace-nowrap font-mono text-[10px] uppercase tracking-widest text-white/70 hover:text-white sm:text-xs"
+                  >
+                    {s}
+                  </button>
+                ) : (
+                  <span
+                    className={`whitespace-nowrap font-mono text-[10px] uppercase tracking-widest sm:text-xs ${
+                      i === step ? "text-white" : "text-white/30"
+                    }`}
+                  >
+                    {s}
+                  </span>
+                )}
                 {i < STEPS.length - 1 && (
                   <span className="h-px w-4 shrink-0 bg-white/10 sm:w-6" aria-hidden />
                 )}
@@ -490,7 +560,7 @@ function DesignStep({ brand, model, product, onDone }) {
           )}
           <div
             ref={canvasContainerRef}
-            className={`w-full max-w-full flex justify-center items-center min-h-[360px] ${!hasTemplate && templateReady ? "rounded-[40px] border-[6px] border-solid border-zinc-900 shadow-[inset_0_0_40px_rgba(0,0,0,0.6)]" : ""}`}
+            className={`case-canvas-host w-full max-w-[420px] mx-auto overflow-hidden flex justify-center items-center ${!hasTemplate && templateReady ? "rounded-[40px] border-[6px] border-solid border-zinc-900 shadow-[inset_0_0_40px_rgba(0,0,0,0.6)]" : ""}`}
             data-testid="case-canvas-host"
           />
           <div className="absolute bottom-4 left-4 font-mono text-[10px] uppercase tracking-widest text-white/40">

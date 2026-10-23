@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Star, Zap } from "lucide-react";
-import { resolveMediaUrl } from "../lib/api";
 import {
   formatPrice,
   caseTypeLabel,
   displayTemplateTitle,
   normalizeProductType,
+  productHasAvailableStock,
+  listingPrice,
+  listingPriceIsFrom,
 } from "../constants/templateProducts";
 import { partitionTags } from "../constants/colorSwatch";
 import { ColorSwatchGroup } from "./ColorSwatch";
@@ -20,6 +22,7 @@ import {
 } from "../lib/templateCartActions";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import ProductCardActionBar from "./ProductCardActionBar";
+import ProductImage from "./ProductImage";
 
 export default function TemplateProductCard({
   item,
@@ -48,10 +51,12 @@ export default function TemplateProductCard({
     return () => window.removeEventListener("wishlist-change", handler);
   }, [product.id]);
 
-  const price = product.effective_price ?? product.sale_price ?? product.price;
-  const hasDiscount = product.discount_percent > 0;
+  const price = listingPrice(product);
+  const priceFrom = listingPriceIsFrom(product);
+  const hasDiscount = !priceFrom && product.discount_percent > 0;
   const isOriginal = normalizeProductType(product.product_type) === "original";
   const { colors: colorTags } = partitionTags(product.tags);
+  const fullyOutOfStock = !productHasAvailableStock(product);
 
   const showActions = !isTouch || mobileActionsOpen;
 
@@ -71,7 +76,7 @@ export default function TemplateProductCard({
   }, [navigate, onQuickView, product]);
 
   const handleAddToCart = useCallback(async () => {
-    if (cartState === "loading") return;
+    if (cartState === "loading" || fullyOutOfStock) return;
     setCartState("loading");
     try {
       if (onAddToCart) {
@@ -86,7 +91,7 @@ export default function TemplateProductCard({
       setCartState("idle");
       navigate(`/template/${product.slug}`);
     }
-  }, [addToCart, cartState, navigate, onAddToCart, product]);
+  }, [addToCart, cartState, fullyOutOfStock, navigate, onAddToCart, product]);
 
   const handleBuyNow = useCallback(async () => {
     try {
@@ -135,10 +140,10 @@ export default function TemplateProductCard({
           aria-expanded={isTouch ? mobileActionsOpen : undefined}
           aria-label={`View ${displayTemplateTitle(product.title)}`}
         >
-          <img
-            src={resolveMediaUrl(product.thumbnail || product.images?.[0])}
+          <ProductImage
+            src={product.thumbnail || product.images?.[0]}
+            variants={product.image_variants}
             alt={product.title}
-            loading="lazy"
             className="product-card-image"
           />
         </Link>
@@ -160,12 +165,21 @@ export default function TemplateProductCard({
             Original
           </span>
         )}
+        {fullyOutOfStock && (
+          <span
+            className="absolute top-2 right-2 z-[2] px-1.5 py-0.5 rounded-md bg-black/70 text-[10px] font-medium text-amber-200"
+            data-testid={`out-of-stock-${product.slug}`}
+          >
+            Out of stock
+          </span>
+        )}
 
         <ProductCardActionBar
           visible={showActions}
           mobile={isTouch}
           onQuickView={handleQuickView}
           onAddToCart={handleAddToCart}
+          cartDisabled={fullyOutOfStock}
           onBuyNow={handleBuyNow}
           onWishlist={handleWishlist}
           wishlisted={wishlisted}
@@ -190,7 +204,9 @@ export default function TemplateProductCard({
               {displayTemplateTitle(product.title)}
             </h3>
             <div className="flex items-center justify-between gap-1 mt-1">
-              <span className="font-medium text-xs">{formatPrice(price)}</span>
+              <span className="font-medium text-xs">
+                {priceFrom ? "From " : ""}{formatPrice(price)}
+              </span>
               {hasDiscount && (
                 <span className="text-[10px] text-white/35 line-through">
                   {formatPrice(product.price)}
@@ -207,7 +223,9 @@ export default function TemplateProductCard({
               {displayTemplateTitle(product.title)}
             </h3>
             <div className="flex items-baseline gap-1.5 mt-0.5">
-              <span className="font-medium text-sm">{formatPrice(price)}</span>
+              <span className="font-medium text-sm">
+                {priceFrom ? "From " : ""}{formatPrice(price)}
+              </span>
               {hasDiscount && (
                 <span className="text-[11px] text-white/35 line-through">
                   {formatPrice(product.price)}
@@ -242,8 +260,13 @@ export default function TemplateProductCard({
               </span>
             </div>
             <div className="flex items-center justify-between mt-auto pt-1 sm:pt-1.5">
-              <div className="flex items-baseline gap-1 sm:gap-1.5">
-                <span className="font-semibold text-sm sm:text-base">{formatPrice(price)}</span>
+              <div className="flex items-baseline gap-1 sm:gap-1.5 min-w-0">
+                <span className="font-semibold text-sm sm:text-base">
+                  {priceFrom ? (
+                    <span className="text-[10px] sm:text-xs font-medium text-white/55 mr-1">From</span>
+                  ) : null}
+                  {formatPrice(price)}
+                </span>
                 {hasDiscount && (
                   <span className="text-[10px] sm:text-xs text-white/45 line-through">
                     {formatPrice(product.price)}
@@ -260,7 +283,9 @@ export default function TemplateProductCard({
                   </span>
                 )}
                 <span className="text-[9px] sm:text-[10px] font-mono text-white/50 uppercase">
-                  {caseTypeLabel(product.case_type)}
+                  {priceFrom
+                    ? `${product.material_count} materials`
+                    : caseTypeLabel(product.case_type)}
                 </span>
               </div>
             </div>

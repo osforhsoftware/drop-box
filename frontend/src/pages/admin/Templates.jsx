@@ -329,7 +329,7 @@ export function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate, fo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="upload-template-dialog"
-        className="max-w-3xl max-h-[90vh] overflow-y-auto bg-[#09090B] border-white/10 text-white"
+        className="max-w-3xl max-h-[90vh] overflow-x-hidden overflow-y-auto bg-[#09090B] border-white/10 text-white"
       >
         <DialogHeader>
           <DialogTitle>
@@ -453,7 +453,7 @@ export function UploadModal({ open, onOpenChange, onSuccess, replaceTemplate, fo
                 </span>
               </div>
               <div className="text-white/40">
-                Transparent background PNG — not a studio mockup photo.
+                Transparent background PNG — not a studio mockup photo. Stored at original size (compression does not change overlays).
               </div>
             </div>
             <div

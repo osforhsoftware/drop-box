@@ -20,10 +20,9 @@ function resolveRuntimeBackendUrl() {
     import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_BACKEND_URL
   );
   if (typeof window === "undefined") return envUrl;
-  const host = window.location.hostname;
-  const isLoopback = host === "localhost" || host === "127.0.0.1";
-  // Phone / LAN: use this page's origin so /api is proxied by Vite.
-  if (!isLoopback && import.meta.env.DEV) {
+  // In dev, call /api on this page (Vite proxies it to port 8000).
+  // A direct call to localhost:8000 fails when the browser picks IPv6.
+  if (import.meta.env.DEV) {
     return window.location.origin.replace(/\/$/, "");
   }
   return envUrl;

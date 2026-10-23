@@ -1,14 +1,22 @@
 import { Link } from "react-router-dom";
 import { X, ShoppingBag, ArrowRight, Star } from "lucide-react";
 import { resolveMediaUrl } from "../lib/api";
-import { formatPrice, caseTypeLabel, displayTemplateTitle } from "../constants/templateProducts";
+import {
+  formatPrice,
+  caseTypeLabel,
+  displayTemplateTitle,
+  productHasAvailableStock,
+  listingPrice,
+  listingPriceIsFrom,
+} from "../constants/templateProducts";
 import { partitionTags } from "../constants/colorSwatch";
 import { ColorSwatchGroup } from "./ColorSwatch";
 
 export default function TemplateQuickView({ item, onClose, onBuyNow, adminPreview = false }) {
   if (!item) return null;
 
-  const price = item.effective_price ?? item.price;
+  const price = listingPrice(item);
+  const priceFrom = listingPriceIsFrom(item);
   const { colors: colorTags } = partitionTags(item.tags);
   const previewImage = resolveMediaUrl(item.thumbnail || item.images?.[0]);
 
@@ -63,7 +71,11 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
             </div>
             <div className="flex justify-between">
               <span className="text-white/50">Case type</span>
-              <span>{caseTypeLabel(item.case_type)}</span>
+              <span>
+                {priceFrom
+                  ? (item.material_labels || []).join(", ") || `${item.material_count} materials`
+                  : caseTypeLabel(item.case_type)}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-white/50">Material</span>
@@ -77,8 +89,11 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
             )}
           </div>
           <div className="mt-6 flex items-baseline gap-3">
-            <span className="font-display text-3xl">{formatPrice(price)}</span>
-            {item.discount_percent > 0 && (
+            <span className="font-display text-3xl">
+              {priceFrom ? <span className="text-base font-medium text-white/55 mr-1">Starting from</span> : null}
+              {formatPrice(price)}
+            </span>
+            {!priceFrom && item.discount_percent > 0 && (
               <span className="text-white/40 line-through">{formatPrice(item.price)}</span>
             )}
           </div>
@@ -87,9 +102,10 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
               <button
                 type="button"
                 onClick={() => onBuyNow?.(item)}
-                className="btn-primary"
+                className="btn-primary disabled:opacity-50"
+                disabled={!productHasAvailableStock(item)}
               >
-                <ShoppingBag aria-hidden /> Buy Now
+                <ShoppingBag aria-hidden /> {productHasAvailableStock(item) ? "Buy Now" : "Out of stock"}
               </button>
             )}
             {item.status === "published" && (

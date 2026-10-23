@@ -4,6 +4,7 @@ const {
   paymentVerificationLabel,
   deliveryStatusLabel,
 } = require("./adminOrderQuery");
+const { orderMaterialLabel } = require("./orderMaterial");
 
 const EXPORT_COLUMNS = Object.freeze([
   { key: "order_id", label: "Order ID" },
@@ -54,14 +55,14 @@ function productLabel(order) {
   if (Array.isArray(order.items) && order.items.length > 0) {
     return order.items
       .map((item) => {
-        const name = [item.brand_name, item.model_name, item.product_name].filter(Boolean).join(" ");
+        const name = [item.brand_name, item.model_name, orderMaterialLabel(item)].filter(Boolean).join(" ");
         const qty = item.quantity || 1;
         return qty > 1 ? `${name} ×${qty}` : name;
       })
       .filter(Boolean)
       .join("; ");
   }
-  return [order.brand_name, order.model_name, order.product_name].filter(Boolean).join(" ");
+  return [order.brand_name, order.model_name, orderMaterialLabel(order)].filter(Boolean).join(" ");
 }
 
 function quantityOf(order) {

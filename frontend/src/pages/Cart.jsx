@@ -4,7 +4,7 @@ import { Trash2, Plus, Minus, ShoppingBag, ArrowRight } from "lucide-react";
 import { useCart } from "../lib/cart";
 import { resolveMediaUrl } from "../lib/api";
 import { replaceDraft } from "../lib/draft";
-import { formatPrice } from "../constants/templateProducts";
+import { formatPrice, isModelOutOfStock, materialLabel, maxPurchasableQuantity } from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
 
 export default function Cart() {
@@ -116,8 +116,14 @@ export default function Cart() {
                       {item.template_product?.title || item.product.name}
                     </h3>
                     <p className="text-xs sm:text-sm text-white/50 mt-0.5 sm:mt-1 truncate">
+                      {materialLabel(item) ? `${materialLabel(item)} · ` : ""}
                       {item.brand.name} • {item.model.name}
                     </p>
+                    {item.template_product && isModelOutOfStock(item.template_product, item.model.name) && (
+                      <span className="mt-1 inline-flex rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                        Out of stock
+                      </span>
+                    )}
                   </div>
                   <button
                     onClick={() => removeFromCart(item.cart_id)}
@@ -141,7 +147,11 @@ export default function Cart() {
                     </span>
                     <button
                       onClick={() => updateQuantity(item.cart_id, item.quantity + 1)}
-                      className="p-1 sm:p-1.5 text-white/60 hover:text-white hover:bg-white/10 rounded"
+                      disabled={
+                        item.template_product
+                        && item.quantity >= maxPurchasableQuantity(item.template_product, item.model?.name)
+                      }
+                      className="p-1 sm:p-1.5 text-white/60 hover:text-white hover:bg-white/10 rounded disabled:opacity-30"
                     >
                       <Plus className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                     </button>

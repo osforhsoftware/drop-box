@@ -4,7 +4,13 @@ import { ArrowLeft, ShoppingBag, Star, Zap, ChevronLeft, ChevronRight, ZoomIn } 
 import { api, resolveMediaUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { startTemplateCheckout } from "../lib/templateCheckout";
-import { formatPrice, caseTypeLabel } from "../constants/templateProducts";
+import {
+  formatPrice,
+  caseTypeLabel,
+  isModelOutOfStock,
+  listMaterialVariants,
+  productFromMaterial,
+} from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
 import { partitionTags } from "../constants/colorSwatch";
 import { ColorSwatchGroup } from "../components/ColorSwatch";
@@ -28,16 +34,22 @@ export default function TemplateDetail() {
   const [galleryIdx, setGalleryIdx] = useState(0);
   const [zoomed, setZoomed] = useState(false);
   const [buying, setBuying] = useState(false);
+  const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     setLoading(true);
     setBrandId("");
     setModelId("");
     setModels([]);
+    setSelectedMaterialId("");
+    setActionError("");
+    setError("");
     api
       .get(`/shop/templates/${slug}`)
       .then(async (r) => {
         setTemplate(r.data);
+        setSelectedMaterialId(r.data.id);
         const brandsRes = await api.get("/brands");
         const brandList = brandsRes.data || [];
         setBrands(brandList);
@@ -71,29 +83,50 @@ export default function TemplateDetail() {
     }
   };
 
+  const materials = listMaterialVariants(template);
+  const selectedVariant = materials.find((item) => item.id === selectedMaterialId) || materials[0];
+  const selectedProduct = productFromMaterial(template, selectedVariant);
+  const selectedModel = models.find((m) => m.id === modelId);
+  const selectedOutOfStock = Boolean(
+    selectedProduct && selectedModel && isModelOutOfStock(selectedProduct, selectedModel.name)
+  );
+
+  const handleMaterialSelect = (variant) => {
+    if (!variant) return;
+    setSelectedMaterialId(variant.id);
+    setActionError("");
+    if (variant.has_variant_image) setGalleryIdx(0);
+  };
+
   const handleAddToCart = async () => {
-    if (!template || !brandId || !modelId) {
-      setError("Please select your brand and model");
+    if (!selectedProduct || !brandId || !modelId) {
+      setActionError("Please select your brand and model");
       return;
     }
     try {
       const brand = brands.find((b) => b.id === brandId);
       const model = models.find((m) => m.id === modelId);
       if (!brand || !model) throw new Error("Device selection missing");
+      if (isModelOutOfStock(selectedProduct, model.name)) {
+        toast.error(`${model.name} is out of stock for this material`);
+        return;
+      }
 
       const productsRes = await api.get("/products", {
         params: { brand_id: brandId, model_id: modelId },
       });
       const product =
-        productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
+        productsRes.data.find((p) => p.slug === selectedProduct.case_type)
+        || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === String(selectedProduct.case_type || "").replace(/-case$/, ""))
+        || productsRes.data[0];
       if (!product) throw new Error("Case type unavailable for this device");
 
-      const designUrl = template.thumbnail || template.images?.[0];
-      const price = template.effective_price ?? template.sale_price ?? template.price;
+      const designUrl = selectedProduct.thumbnail || selectedProduct.images?.[0];
+      const price = selectedProduct.effective_price ?? selectedProduct.sale_price ?? selectedProduct.price;
 
       addToCart({
-        template_product: template,
-        template_product_id: template.id,
+        template_product: selectedProduct,
+        template_product_id: selectedProduct.id,
         brand,
         model,
         product: { ...product, price },
@@ -101,43 +134,50 @@ export default function TemplateDetail() {
         preview_url: designUrl,
         quantity: 1,
       });
-      toast.success(`Added for ${brand.name} ${model.name}`);
+      toast.success(`Added ${selectedVariant?.case_type_label || caseTypeLabel(selectedProduct.case_type)} for ${brand.name} ${model.name}`);
     } catch {
-      setError("Could not add to cart. Please select a phone model available for this case.");
+      setActionError("Could not add to cart. Please select a phone model available for this case.");
     }
   };
 
   const handlePurchase = async () => {
-    if (!template || !brandId || !modelId) {
-      setError("Please select your brand and model");
+    if (!selectedProduct || !brandId || !modelId) {
+      setActionError("Please select your brand and model");
+      return;
+    }
+    const brand = brands.find((b) => b.id === brandId);
+    const model = models.find((m) => m.id === modelId);
+    if (!brand || !model) {
+      setActionError("Please select your brand and model");
+      return;
+    }
+    if (isModelOutOfStock(selectedProduct, model.name)) {
+      toast.error(`${model.name} is out of stock for this material`);
       return;
     }
     setBuying(true);
-    setError("");
+    setActionError("");
     try {
-      // Use the dropdown selection from this page (not template defaults)
-      const brand = brands.find((b) => b.id === brandId);
-      const model = models.find((m) => m.id === modelId);
-      if (!brand || !model) throw new Error("Device selection missing");
-
       const productsRes = await api.get("/products", {
         params: { brand_id: brandId, model_id: modelId },
       });
       const product =
-        productsRes.data.find((p) => p.slug === template.case_type) || productsRes.data[0];
+        productsRes.data.find((p) => p.slug === selectedProduct.case_type)
+        || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === String(selectedProduct.case_type || "").replace(/-case$/, ""))
+        || productsRes.data[0];
       if (!product) {
         throw new Error("This case type is not available for the selected device");
       }
 
-      startTemplateCheckout({ template, brand, model, product, quantity: 1 });
-      toast.success(`Checkout for ${brand.name} · ${model.name}`);
+      startTemplateCheckout({ template: selectedProduct, brand, model, product, quantity: 1 });
+      toast.success(`Checkout for ${selectedVariant?.case_type_label || caseTypeLabel(selectedProduct.case_type)} · ${brand.name} ${model.name}`);
       if (!user) {
         navigate("/login?next=/checkout");
         return;
       }
       navigate("/checkout");
     } catch (err) {
-      setError(err.message || "Could not start checkout. Please select a phone model.");
+      setActionError(err.message || "Could not start checkout. Please select a phone model.");
     } finally {
       setBuying(false);
     }
@@ -167,10 +207,12 @@ export default function TemplateDetail() {
     );
   }
 
-  const images = template.images?.length ? template.images : [template.thumbnail];
-  const price = template.effective_price ?? template.sale_price ?? template.price;
-  const currentImg = resolveMediaUrl(images[galleryIdx]);
+  const gallerySource = selectedVariant?.has_variant_image ? selectedProduct : template;
+  const images = gallerySource.images?.length ? gallerySource.images : [gallerySource.thumbnail];
+  const price = selectedProduct.effective_price ?? selectedProduct.sale_price ?? selectedProduct.price;
+  const currentImg = resolveMediaUrl(images[galleryIdx] || images[0]);
   const { colors: colorTags } = partitionTags(template.tags);
+  const selectedMaterialLabel = selectedVariant?.case_type_label || caseTypeLabel(selectedProduct.case_type);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-8 sm:py-10" data-testid="template-detail">
@@ -262,14 +304,14 @@ export default function TemplateDetail() {
           )}
 
           <div className="flex items-baseline gap-3">
-            <span className="text-3xl font-medium">{formatPrice(price)}</span>
-            {template.discount_percent > 0 && (
+            <span className="text-3xl font-medium" data-testid="product-price">{formatPrice(price)}</span>
+            {selectedProduct.discount_percent > 0 && (
               <>
                 <span className="text-lg text-white/40 line-through">
-                  {formatPrice(template.price)}
+                  {formatPrice(selectedProduct.price)}
                 </span>
                 <span className="px-2 py-0.5 rounded bg-brand/20 text-brand text-xs font-mono">
-                  SAVE {template.discount_percent}%
+                  SAVE {selectedProduct.discount_percent}%
                 </span>
               </>
             )}
@@ -279,8 +321,50 @@ export default function TemplateDetail() {
             + {formatPrice(SHIPPING_FEE)} shipping · Total {formatPrice(price + SHIPPING_FEE)}
           </p>
 
-          <p className="text-white/60 leading-relaxed">
-            {template.description || template.short_description}
+          {materials.length > 0 && (
+            <div className="space-y-2" data-testid="material-select">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-medium text-sm">Material</h3>
+                <span className="text-xs text-white/50" data-testid="selected-material-label">
+                  {selectedMaterialLabel}
+                </span>
+              </div>
+              <div role="radiogroup" aria-label="Case material" className="flex flex-wrap gap-2">
+                {materials.map((variant) => {
+                  const selected = variant.id === selectedVariant?.id;
+                  const materialOut = selectedModel
+                    ? isModelOutOfStock({ ...variant, variants: variant.variants }, selectedModel.name)
+                    : variant.in_stock === false;
+                  return (
+                    <button
+                      key={variant.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      data-testid={`material-${variant.case_type}`}
+                      onClick={() => handleMaterialSelect(variant)}
+                      className={`rounded-xl px-3 py-2 text-left text-sm border transition-colors min-w-[8.5rem] ${
+                        selected
+                          ? "border-brand bg-brand/15 ring-2 ring-brand"
+                          : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                      }`}
+                    >
+                      <span className="block font-medium">
+                        {variant.case_type_label || caseTypeLabel(variant.case_type)}
+                      </span>
+                      <span className="block text-xs text-white/55 mt-0.5">
+                        {formatPrice(variant.effective_price)}
+                        {materialOut ? " · Out of stock" : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <p className="text-white/60 leading-relaxed" data-testid="product-description">
+            {selectedProduct.description || selectedProduct.short_description}
           </p>
 
           <div className="glass rounded-2xl p-5 space-y-3 text-sm">
@@ -288,11 +372,11 @@ export default function TemplateDetail() {
             <dl className="grid grid-cols-2 gap-3 text-white/60">
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Case type</dt>
-                <dd>{caseTypeLabel(template.case_type)}</dd>
+                <dd>{selectedMaterialLabel}</dd>
               </div>
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Material</dt>
-                <dd>{template.material || "Premium UV print"}</dd>
+                <dd>{selectedProduct.material || selectedMaterialLabel || "Premium UV print"}</dd>
               </div>
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Brand</dt>
@@ -336,7 +420,12 @@ export default function TemplateDetail() {
                   value={modelId}
                   onChange={setModelId}
                   placeholder={brandId ? "Select model" : "Select brand first"}
-                  options={models.map((m) => ({ value: m.id, label: m.name }))}
+                  options={models.map((m) => ({
+                    value: m.id,
+                    label: selectedProduct && isModelOutOfStock(selectedProduct, m.name)
+                      ? `${m.name} (Out of stock)`
+                      : m.name,
+                  }))}
                   disabled={!brandId}
                   testId="detail-model-select"
                 />
@@ -351,6 +440,19 @@ export default function TemplateDetail() {
                 </span>
               </p>
             )}
+            {selectedOutOfStock && (
+              <p className="text-xs text-amber-200/90" data-testid="variant-out-of-stock">
+                <span className="inline-flex items-center rounded-md bg-amber-500/15 px-2 py-0.5 font-medium text-amber-300">
+                  Out of stock
+                </span>
+                <span className="ml-2">
+                  {selectedMaterialLabel} for {selectedModel.name} is unavailable. Other materials or models can still be ordered.
+                </span>
+              </p>
+            )}
+            {actionError && (
+              <p className="text-xs text-red-300" data-testid="detail-action-error">{actionError}</p>
+            )}
           </div>
 
           <div className="btn-row pt-2">
@@ -360,16 +462,16 @@ export default function TemplateDetail() {
                 e.preventDefault();
                 handleAddToCart();
               }}
-              disabled={buying || !modelId || template.stock <= 0}
+              disabled={buying || !modelId || selectedOutOfStock}
               className="btn-secondary disabled:opacity-50"
             >
               <ShoppingBag aria-hidden />
-              {template.stock <= 0 ? "Out of stock" : "Add to Cart"}
+              {selectedOutOfStock ? "Out of stock" : "Add to Cart"}
             </button>
             <button
               type="button"
               onClick={handlePurchase}
-              disabled={buying || !modelId || template.stock <= 0}
+              disabled={buying || !modelId || selectedOutOfStock}
               className="btn-primary disabled:opacity-50"
               data-testid="buy-now"
             >
