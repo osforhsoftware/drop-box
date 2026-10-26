@@ -53,6 +53,7 @@ const {
   toRelativeMediaUrl,
   toPublicProduct,
   displayTemplateTitle,
+  getUpdatedTemplateTitle,
   stripCopyTitleSuffix,
   stripCopySlugSuffix,
   cloneTemplateProductMedia,
@@ -68,6 +69,7 @@ const {
   COLLECTIONS,
   PHONE_BRANDS,
   PRODUCT_TYPES,
+  CASE_TYPE_ALIASES,
 } = require("./lib/templateProducts");
 const {
   resolveVariantInventory,
@@ -215,10 +217,34 @@ const DEFAULT_BRANDS = [
 ];
 
 const DEFAULT_PRODUCTS = [
-  { name: "Silicone Case", slug: "silicone", price: 299.0, description: "Soft-touch liquid silicone with microfiber lining. Slim, grippy, and shock-absorbent." },
-  { name: "Transparent Case", slug: "transparent", price: 349.0, description: "Crystal-clear polycarbonate. Show off your phone while protecting your design." },
-  { name: "Matte Case", slug: "matte", price: 399.0, description: "Smooth matte finish that resists fingerprints. Premium soft-touch feel." },
-  { name: "Glass Case", slug: "glass", price: 499.0, description: "Tempered glass back with metallic edges. Scratch resistant flagship feel." },
+  {
+    name: "Silicone Case",
+    slug: "silicone",
+    price: 299.0,
+    description: "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps, complete with precision cutouts and responsive button covers.",
+    material: "Liquid Silicone",
+  },
+  {
+    name: "Transparent Case",
+    slug: "transparent",
+    price: 349.0,
+    description: "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish and design show through while guarding against scratches and everyday impact.",
+    material: "Polycarbonate",
+  },
+  {
+    name: "Matte Case",
+    slug: "matte",
+    price: 399.0,
+    description: "Finished with a premium satin matte coating that actively resists fingerprints, oils, and surface smudges. Combines a sleek, low-profile silhouette with smooth tactile grip and durable daily edge protection.",
+    material: "Matte Polycarbonate",
+  },
+  {
+    name: "Glass Case",
+    slug: "glass",
+    price: 499.0,
+    description: "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Features an ultra-smooth glossy surface with high scratch resistance for a clean, luxury look and premium hand feel.",
+    material: "Tempered Glass",
+  },
 ];
 
 function hashPassword(pw) {
@@ -348,14 +374,9 @@ async function resolveCatalogLine(line) {
   const brandId = String(line?.brand_id || "").trim();
   const modelId = String(line?.model_id || "").trim();
   const productId = String(line?.product_id || "").trim();
-  const [brand, model, product, relation] = await Promise.all([
+  const [brand, model] = await Promise.all([
     db.collection("brands").findOne({ id: brandId }),
     db.collection("models").findOne({ id: modelId, brand_id: brandId }),
-    db.collection("products").findOne({ id: productId }),
-    db.collection("phone_model_case_types").findOne({
-      phone_model_id: modelId,
-      case_type_id: productId,
-    }),
   ]);
   if (!brand) {
     const err = new Error("Brand not found");
@@ -367,19 +388,8 @@ async function resolveCatalogLine(line) {
     err.status = 400;
     throw err;
   }
-  if (!product) {
-    const err = new Error("Case type not found");
-    err.status = 404;
-    throw err;
-  }
-  if (!modelCaseTypeIsEnabled(relation, product)) {
-    const err = new Error(`${product.name} is not enabled for ${model.name}`);
-    err.status = 400;
-    throw err;
-  }
 
   let templateProduct = null;
-  let price = Number(relation.price);
   if (line.template_product_id) {
     templateProduct = await db.collection("template_products").findOne(
       publishedShopClause({ id: line.template_product_id })
@@ -389,12 +399,113 @@ async function resolveCatalogLine(line) {
       err.status = 404;
       throw err;
     }
+  }
+
+  let [product, relation] = await Promise.all([
+    db.collection("products").findOne({ id: productId }),
+    db.collection("phone_model_case_types").findOne({
+      phone_model_id: modelId,
+      case_type_id: productId,
+    }),
+  ]);
+
+  if (!product && templateProduct?.case_type) {
+    product = await db.collection("products").findOne({
+      $or: [
+        { slug: templateProduct.case_type },
+        { slug: `${templateProduct.case_type}-case` },
+        { slug: templateProduct.case_type.replace(/-case$/, "") },
+      ],
+    });
+  }
+
+  if (!product) {
+    if (templateProduct) {
+      product = {
+        id: templateProduct.case_type || "default",
+        name: templateProduct.case_type_label || humanizeCaseType(templateProduct.case_type) || "Phone Case",
+        slug: templateProduct.case_type || "custom",
+      };
+    } else {
+      const err = new Error("Case type not found");
+      err.status = 404;
+      throw err;
+    }
+  }
+
+  if (!templateProduct && !modelCaseTypeIsEnabled(relation, product)) {
+    const err = new Error(`${product.name} is not enabled for ${model.name}`);
+    err.status = 400;
+    throw err;
+  }
+
+  let price = Number(relation?.price) || 0;
+  if (line.template_product_id) {
+    templateProduct = await db.collection("template_products").findOne(
+      publishedShopClause({ id: line.template_product_id })
+    );
+    if (!templateProduct) {
+      const err = new Error("Template product not found or unavailable");
+      err.status = 404;
+      throw err;
+    }
+
+    // 1. Validate brand compatibility
+    if (templateProduct.phone_brand && brand.name) {
+      if (templateProduct.phone_brand.trim().toLowerCase() !== brand.name.trim().toLowerCase()) {
+        const err = new Error(`${templateProduct.title} is not available for ${brand.name}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    // 2. Validate model compatibility
+    if (Array.isArray(templateProduct.phone_models) && templateProduct.phone_models.length > 0) {
+      const isCompat = templateProduct.phone_models.some((m) => {
+        const s = String(m).trim().toLowerCase();
+        return s === String(model.name).trim().toLowerCase() || s === String(model.id).trim().toLowerCase();
+      });
+      if (!isCompat) {
+        const err = new Error(`${templateProduct.title} is not available for ${model.name}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    const pSlug = String(product.slug || "").trim().toLowerCase();
+    const tCase = String(templateProduct.case_type || "").trim().toLowerCase();
+    const isDirectMatch = tCase === pSlug || Boolean(CASE_TYPE_ALIASES[tCase]?.includes(pSlug));
+
+    // If design has a sibling template product matching the chosen case material, resolve to that sibling
+    if (!isDirectMatch && templateProduct.design_id) {
+      const sibling = await db.collection("template_products").findOne(
+        publishedShopClause({
+          design_id: templateProduct.design_id,
+          ...caseTypeFilterClause(pSlug),
+        })
+      );
+      if (sibling) {
+        templateProduct = sibling;
+      }
+    }
+
+    const currentCase = String(templateProduct.case_type || "").trim().toLowerCase();
+    const isDefaultMaterial = currentCase === pSlug || Boolean(CASE_TYPE_ALIASES[currentCase]?.includes(pSlug));
+
+    // 3. Validate material compatibility
+    if (!isDefaultMaterial) {
+      const err = new Error(`${product.name} is not available for this design`);
+      err.status = 400;
+      throw err;
+    }
+
     const stockError = assertCanPurchaseVariant(templateProduct, model.name, line.quantity);
     if (stockError) {
       const err = new Error(stockError);
       err.status = 400;
       throw err;
     }
+
     price = effectivePrice(templateProduct);
   }
 
@@ -1599,6 +1710,14 @@ api.post("/models", getCurrentAdmin, optionalCatalogUpload("models"), async (req
   if (!name) return res.status(400).json({ detail: "Model name is required" });
   const brand = await db.collection("brands").findOne({ id: brand_id });
   if (!brand) return res.status(404).json({ detail: "Brand not found" });
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const duplicate = await db.collection("models").findOne({
+    brand_id,
+    name: { $regex: new RegExp(`^${escapedName}$`, "i") },
+  });
+  if (duplicate) {
+    return res.status(400).json({ detail: `Model "${name}" already exists for this brand` });
+  }
   const caseTypes = await parseModelCaseTypes(req.body?.case_types);
   if (caseTypes.error) return res.status(400).json({ detail: caseTypes.error });
   const item = {
@@ -1627,6 +1746,15 @@ api.patch("/models/:model_id", getCurrentAdmin, optionalCatalogUpload("models"),
   if (req.body?.name != null) {
     const name = String(req.body.name).trim();
     if (!name) return res.status(400).json({ detail: "Model name is required" });
+    const escapedPatchName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const duplicate = await db.collection("models").findOne({
+      brand_id: existing.brand_id,
+      id: { $ne: existing.id },
+      name: { $regex: new RegExp(`^${escapedPatchName}$`, "i") },
+    });
+    if (duplicate) {
+      return res.status(400).json({ detail: `Model "${name}" already exists for this brand` });
+    }
     update.name = name;
   }
   if (req.file) {
@@ -2648,10 +2776,37 @@ api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
   });
 });
 
+async function loadAllowedCaseTypeSlugs() {
+  const [caseTypeDocs, productDocs] = await Promise.all([
+    db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray(),
+    db.collection("products").find({}, { projection: { slug: 1 } }).toArray(),
+  ]);
+  return [...new Set([
+    ...caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()),
+    ...productDocs.map((p) => String(p.slug || "").toLowerCase()),
+    ...productDocs.map((p) => String(p.slug || "").replace(/-case$/, "").toLowerCase()),
+    "silicone", "matte", "transparent", "glass", "oil-green"
+  ])].filter(Boolean);
+}
+
 api.post("/admin/template-products", getCurrentAdmin, handleTemplateProductUpload, async (req, res) => {
-  const caseTypeDocs = await db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray();
-  const allowedCaseTypes = caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()).filter(Boolean);
-  const parsed = parseFormFields(req.body || {}, { allowedCaseTypes });
+  const allowedCaseTypes = await loadAllowedCaseTypeSlugs();
+
+  const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
+  const brandName = String(req.body?.phone_brand || "").trim();
+  const matchedBrand = brandDocs.find(
+    (b) => b.name?.toLowerCase() === brandName.toLowerCase() || b.id === brandName
+  );
+  let modelDocs = [];
+  if (matchedBrand) {
+    modelDocs = await db.collection("models").find({ brand_id: matchedBrand.id }, { projection: { id: 1, name: 1 } }).toArray();
+  }
+
+  const parsed = parseFormFields(req.body || {}, {
+    allowedCaseTypes,
+    allowedBrands: brandDocs,
+    allowedModels: modelDocs,
+  });
   if (parsed.error) return res.status(400).json({ detail: parsed.error });
 
   const uploaded = collectUploadedTemplateImages(req);
@@ -2682,14 +2837,29 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
     return res.status(400).json({ detail: "Restore the product from trash before editing" });
   }
 
-  const caseTypeDocs = await db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray();
+  const baseAllowed = await loadAllowedCaseTypeSlugs();
   const allowedCaseTypes = [
     ...new Set([
-      ...caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()).filter(Boolean),
+      ...baseAllowed,
       String(existing.case_type || "").toLowerCase(),
     ].filter(Boolean)),
   ];
-  const parsed = parseFormFields(req.body || {}, { allowedCaseTypes });
+
+  const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
+  const brandName = String(req.body?.phone_brand || existing.phone_brand || "").trim();
+  const matchedBrand = brandDocs.find(
+    (b) => b.name?.toLowerCase() === brandName.toLowerCase() || b.id === brandName
+  );
+  let modelDocs = [];
+  if (matchedBrand) {
+    modelDocs = await db.collection("models").find({ brand_id: matchedBrand.id }, { projection: { id: 1, name: 1 } }).toArray();
+  }
+
+  const parsed = parseFormFields(req.body || {}, {
+    allowedCaseTypes,
+    allowedBrands: brandDocs,
+    allowedModels: modelDocs,
+  });
   if (parsed.error) return res.status(400).json({ detail: parsed.error });
 
   const slug = await ensureUniqueTemplateSlug(
@@ -2796,8 +2966,7 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     return res.status(400).json({ detail: "Restore the product from trash before adding a material" });
   }
 
-  const caseTypeDocs = await db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray();
-  const allowedCaseTypes = caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()).filter(Boolean);
+  const allowedCaseTypes = await loadAllowedCaseTypeSlugs();
   const case_type = String(req.body?.case_type || "").trim().toLowerCase();
   if (!case_type) return res.status(400).json({ detail: "Case type is required" });
   if (allowedCaseTypes.length && !allowedCaseTypes.includes(case_type)) {
@@ -2810,7 +2979,10 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     return res.status(400).json({ detail: "This design already has that material" });
   }
 
-  const price = Number(req.body?.price);
+  let price = Number(req.body?.price);
+  if (!Number.isFinite(price) || price <= 0) {
+    price = Number(existing.price) || 0;
+  }
   if (!Number.isFinite(price) || price <= 0) {
     return res.status(400).json({ detail: "Valid price is required" });
   }
@@ -2821,20 +2993,29 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     return res.status(400).json({ detail: "sale_price must be a number that is 0 or greater" });
   }
 
+  const targetModels = Array.isArray(req.body?.phone_models) && req.body.phone_models.length > 0
+    ? req.body.phone_models
+    : (Array.isArray(existing.phone_models) ? existing.phone_models : []);
+
   const stockOverride = req.body?.stock;
-  let variant_inventory = resolveVariantInventory(existing);
-  let stock = Math.max(0, Math.floor(Number(existing.stock) || 0));
-  if (stockOverride != null && stockOverride !== "") {
-    const nextStock = Math.max(0, Math.floor(Number(stockOverride) || 0));
-    variant_inventory = synthesizeVariantInventory(existing.phone_models || [], nextStock);
-    stock = availableStock(variant_inventory) || nextStock;
-  }
+  const initialStock = stockOverride != null && stockOverride !== ""
+    ? Math.max(0, Math.floor(Number(stockOverride) || 0))
+    : Math.max(0, Math.floor(Number(existing.stock) || 0));
+
+  let variant_inventory = synthesizeVariantInventory(targetModels, initialStock);
+  let stock = availableStock(variant_inventory) || initialStock;
 
   const designId = await ensureDesignId(existing);
   const slug = await ensureUniqueTemplateSlug(
     `${existing.slug}-${case_type.replace(/-case$/, "")}`
   );
   const ts = nowIso();
+  const defaultMat = String(req.body?.material || "").trim() || (
+    case_type.includes("silicone") ? "Liquid Silicone" :
+    case_type.includes("transparent") ? "Polycarbonate" :
+    case_type.includes("glass") ? "Tempered Glass" :
+    case_type.includes("matte") ? "Matte Polycarbonate" : ""
+  );
   const item = {
     id: crypto.randomUUID(),
     title: existing.title,
@@ -2843,11 +3024,11 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     description: String(req.body?.description || existing.description || "").trim(),
     short_description: String(req.body?.short_description || existing.short_description || "").trim().slice(0, 300),
     phone_brand: existing.phone_brand,
-    phone_models: Array.isArray(existing.phone_models) ? existing.phone_models : [],
+    phone_models: targetModels,
     category: existing.category,
     collection: existing.collection,
     case_type,
-    material: String(req.body?.material || "").trim(),
+    material: defaultMat,
     price,
     sale_price: Number.isFinite(sale_price) && sale_price > 0 ? sale_price : null,
     stock,
@@ -2861,8 +3042,10 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     rating: existing.rating,
     review_count: existing.review_count,
     seo: existing.seo || {},
-    thumbnail: existing.thumbnail,
-    images: Array.isArray(existing.images) ? existing.images : [],
+    thumbnail: req.body?.thumbnail || existing.thumbnail,
+    images: Array.isArray(req.body?.images) && req.body.images.length > 0
+      ? req.body.images
+      : (Array.isArray(existing.images) ? existing.images : []),
     design_id: designId,
     order_count: 0,
     created_at: ts,
@@ -3019,7 +3202,87 @@ api.post("/admin/template-products/:id/duplicate", getCurrentAdmin, async (req, 
     return res.status(400).json({ detail: "Restore the product from trash before duplicating" });
   }
 
+  const siblings = await loadDesignSiblings(source, { publishedOnly: false });
   const ts = nowIso();
+
+  if (siblings.length > 1) {
+    const newDesignId = crypto.randomUUID();
+    const newTitle = await duplicateTemplateTitle(source.title);
+    const primaryBaseSlug = `${stripCopySlugSuffix(source.slug)}-copy`;
+    const primarySlug = await ensureUniqueTemplateSlug(primaryBaseSlug);
+
+    const {
+      _id: _sId,
+      id: _sOldId,
+      created_at: _sCreated,
+      updated_at: _sUpdated,
+      order_count: _sOrderCount,
+      trashed_at: _sTrash,
+      trashed_from_status: _sTrashStatus,
+      design_id: _sOldDesignId,
+      ...sourceRest
+    } = source;
+
+    const sourceMedia = cloneTemplateProductMedia(sourceRest, { uploadDir: UPLOAD_DIR });
+    const primaryItem = {
+      ...sourceRest,
+      thumbnail: sourceMedia.thumbnail,
+      images: sourceMedia.images,
+      seo: sourceMedia.seo,
+      id: crypto.randomUUID(),
+      title: newTitle,
+      slug: primarySlug,
+      design_id: newDesignId,
+      status: "draft",
+      featured: false,
+      order_count: 0,
+      created_at: ts,
+      updated_at: ts,
+    };
+
+    const duplicateSiblings = [primaryItem];
+
+    for (const sib of siblings) {
+      if (sib.id === source.id) continue;
+      const sibCaseSuffix = String(sib.case_type || "").replace(/-case$/, "").toLowerCase().trim();
+      const sibBaseSlug = `${primarySlug}-${sibCaseSuffix || "variant"}`;
+      const sibSlug = await ensureUniqueTemplateSlug(sibBaseSlug);
+
+      const {
+        _id: _sibMongoId,
+        id: _sibOldId,
+        created_at: _sibCreated,
+        updated_at: _sibUpdated,
+        order_count: _sibOrderCount,
+        trashed_at: _sibTrash,
+        trashed_from_status: _sibTrashStatus,
+        design_id: _sibOldDesignId,
+        ...sibRest
+      } = sib;
+
+      const sibMedia = cloneTemplateProductMedia(sibRest, { uploadDir: UPLOAD_DIR });
+      const duplicateSib = {
+        ...sibRest,
+        thumbnail: sibMedia.thumbnail,
+        images: sibMedia.images,
+        seo: sibMedia.seo,
+        id: crypto.randomUUID(),
+        title: newTitle,
+        slug: sibSlug,
+        design_id: newDesignId,
+        status: sib.status || "draft",
+        featured: false,
+        order_count: 0,
+        created_at: ts,
+        updated_at: ts,
+      };
+      duplicateSiblings.push(duplicateSib);
+    }
+
+    await db.collection("template_products").insertMany(duplicateSiblings);
+    return res.json(primaryItem);
+  }
+
   const baseSlug = `${stripCopySlugSuffix(source.slug)}-copy`;
   const slug = await ensureUniqueTemplateSlug(baseSlug);
   const title = await duplicateTemplateTitle(source.title);
@@ -3265,6 +3528,10 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
   if (isMultiItem) {
     orderItems = pricedOrder.lines.map((line) => {
       const materialSnap = snapshotOrderMaterial(line, caseTypeLabels);
+      const templateTitle = line.template_product_title
+        || (line.templateProduct ? getUpdatedTemplateTitle(line.templateProduct, null, line.product) : null)
+        || line.templateProduct?.title
+        || null;
       return {
         brand_id: line.brand.id,
         brand_name: line.brand.name,
@@ -3277,7 +3544,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
         quantity: line.quantity,
         price: line.price,
         template_product_id: line.template_product_id || null,
-        template_product_title: line.templateProduct?.title || line.template_product_title || null,
+        template_product_title: templateTitle,
         template_id: line.template_id || null,
         design_transform: line.design_transform || null,
         case_color: line.case_color || null,
@@ -3294,7 +3561,10 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     body.model_name = first.model.name;
     body.product_id = first.product.id;
     body.product_name = first.product.name;
-    body.template_product_title = first.templateProduct?.title || first.template_product_title || null;
+    body.template_product_title = first.template_product_title
+      || (first.templateProduct ? getUpdatedTemplateTitle(first.templateProduct, null, first.product) : null)
+      || first.templateProduct?.title
+      || null;
     Object.assign(body, firstMaterial);
     if (first.template_product_id) body.template_product_id = first.template_product_id;
     if (first.design_url) body.design_url = first.design_url;
@@ -3309,7 +3579,11 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
     body.product_id = line.product.id;
     body.product_name = line.product.name;
     body.price = line.price;
-    body.template_product_title = line.templateProduct?.title || body.template_product_title || null;
+    body.template_product_title = line.template_product_title
+      || (line.templateProduct ? getUpdatedTemplateTitle(line.templateProduct, null, line.product) : null)
+      || line.templateProduct?.title
+      || body.template_product_title
+      || null;
     Object.assign(body, snapshotOrderMaterial(line, caseTypeLabels));
     if (body.case_color == null && line.case_color != null) {
       body.case_color = line.case_color;
@@ -4509,6 +4783,46 @@ async function seed() {
     console.log("Seeded default products");
   }
 
+  const standardProductDescriptions = {
+    silicone: {
+      description: "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps, complete with precision cutouts and responsive button covers.",
+      material: "Liquid Silicone",
+    },
+    transparent: {
+      description: "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish and design show through while guarding against scratches and everyday impact.",
+      material: "Polycarbonate",
+    },
+    matte: {
+      description: "Finished with a premium satin matte coating that actively resists fingerprints, oils, and surface smudges. Combines a sleek, low-profile silhouette with smooth tactile grip and durable daily edge protection.",
+      material: "Matte Polycarbonate",
+    },
+    glass: {
+      description: "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Features an ultra-smooth glossy surface with high scratch resistance for a clean, luxury look and premium hand feel.",
+      material: "Tempered Glass",
+    },
+    "oil-green": {
+      description: "Crafted in a distinctive deep oil-green tone with a tactile soft-touch matte finish. Combines impact-absorbing corner protection with a smudge-resistant surface tailored for comfortable everyday handling.",
+      material: "Tactile Matte Polymer",
+    },
+  };
+
+  const existingProducts = await db.collection("products").find({}).toArray();
+  for (const prod of existingProducts) {
+    const slugKey = String(prod.slug || "").replace(/-case$/i, "").toLowerCase();
+    const config = standardProductDescriptions[slugKey];
+    if (config) {
+      const curDesc = String(prod.description || "").trim();
+      const needsDesc = !curDesc || curDesc.length < 90 || curDesc === "963" || curDesc === "oky";
+      const needsMat = !prod.material;
+      if (needsDesc || needsMat) {
+        const setPatch = {};
+        if (needsDesc) setPatch.description = config.description;
+        if (needsMat) setPatch.material = config.material;
+        await db.collection("products").updateOne({ id: prod.id }, { $set: setPatch });
+      }
+    }
+  }
+
   const legacyProducts = await db.collection("products")
     .find({ price: { $type: "number" } })
     .toArray();
@@ -4567,7 +4881,208 @@ async function seed() {
       }
     );
   }
+
+  // Ensure standard case types exist and are synchronized
+  const standardCaseTypes = [
+    { name: "Silicone", slug: "silicone", order: 1, image: "/api/uploads/categories/silicone-case.png" },
+    { name: "Transparent", slug: "transparent", order: 2 },
+    { name: "Matte", slug: "matte", order: 3 },
+    { name: "Glass", slug: "glass", order: 4, image: "/api/uploads/categories/glass-case.png" },
+    { name: "Oil green", slug: "oil-green", order: 5, image: "/api/uploads/categories/oil-green-case.png" },
+  ];
+  for (const ct of standardCaseTypes) {
+    const existingCt = await db.collection("case_types").findOne({
+      $or: [{ slug: ct.slug }, { name: ct.name }],
+    });
+    if (!existingCt) {
+      await db.collection("case_types").insertOne({
+        id: crypto.randomUUID(),
+        name: ct.name,
+        slug: ct.slug,
+        link: `/shop?case_type=${ct.slug}`,
+        image: ct.image || null,
+        order: ct.order,
+        created_at: nowIso(),
+      });
+    } else {
+      const updates = {};
+      if (existingCt.slug === "test-case-type" && ct.slug === "matte") {
+        updates.slug = "matte";
+        updates.name = "Matte";
+      }
+      if (!existingCt.image && ct.image) {
+        updates.image = ct.image;
+      }
+      if (Object.keys(updates).length > 0) {
+        await db.collection("case_types").updateOne(
+          { id: existingCt.id },
+          { $set: updates }
+        );
+      }
+    }
+  }
+
+  // Ensure iphone template has design_id and active material variants (Matte, Transparent, Silicone, Glass)
+  const iphoneTemplate = await db.collection("template_products").findOne({ slug: "iphone" });
+  if (iphoneTemplate) {
+    let designId = iphoneTemplate.design_id;
+    if (!designId) {
+      designId = crypto.randomUUID();
+      await db.collection("template_products").updateOne(
+        { id: iphoneTemplate.id },
+        { $set: { design_id: designId, case_type: "matte", material: "Matte Polycarbonate" } }
+      );
+    }
+    const iphoneVariants = [
+      {
+        slug: "iphone-transparent",
+        case_type: "transparent",
+        material: "Polycarbonate",
+        price: 349,
+        description: "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish show through.",
+        stock: 50,
+      },
+      {
+        slug: "iphone-silicone",
+        case_type: "silicone",
+        material: "Liquid Silicone",
+        price: 299,
+        description: "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps.",
+        stock: 50,
+      },
+      {
+        slug: "iphone-glass",
+        case_type: "glass",
+        material: "Tempered Glass",
+        price: 499,
+        description: "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Ultra-smooth glossy surface with high scratch resistance.",
+        stock: 30,
+      },
+    ];
+    for (const v of iphoneVariants) {
+      const existingVariant = await db.collection("template_products").findOne({
+        $or: [{ slug: v.slug }, { design_id: designId, case_type: v.case_type }],
+      });
+      if (!existingVariant) {
+        const ts = nowIso();
+        await db.collection("template_products").insertOne({
+          id: crypto.randomUUID(),
+          title: iphoneTemplate.title,
+          slug: v.slug,
+          product_type: iphoneTemplate.product_type || "original",
+          description: v.description,
+          short_description: v.description.slice(0, 120),
+          phone_brand: iphoneTemplate.phone_brand || "Apple",
+          phone_models: Array.isArray(iphoneTemplate.phone_models) ? iphoneTemplate.phone_models : [],
+          category: iphoneTemplate.category || "Minimal",
+          collection: iphoneTemplate.collection || "Essentials",
+          case_type: v.case_type,
+          material: v.material,
+          price: v.price,
+          sale_price: null,
+          stock: v.stock,
+          variant_inventory: [],
+          sku: null,
+          tags: Array.isArray(iphoneTemplate.tags) ? iphoneTemplate.tags : [],
+          featured: false,
+          best_seller: false,
+          new_arrival: true,
+          status: "published",
+          rating: iphoneTemplate.rating || 4.5,
+          review_count: 0,
+          seo: iphoneTemplate.seo || {},
+          thumbnail: iphoneTemplate.thumbnail,
+          images: Array.isArray(iphoneTemplate.images) ? iphoneTemplate.images : [],
+          design_id: designId,
+          order_count: 0,
+          created_at: ts,
+          updated_at: ts,
+        });
+      }
+    }
+  }
+
+  // Ensure iphone-copy has its own design_id and full material group
+  const iphoneCopy = await db.collection("template_products").findOne({ slug: "iphone-copy" });
+  if (iphoneCopy) {
+    let copyDesignId = iphoneCopy.design_id;
+    if (!copyDesignId) {
+      copyDesignId = crypto.randomUUID();
+      await db.collection("template_products").updateOne(
+        { id: iphoneCopy.id },
+        { $set: { design_id: copyDesignId, case_type: "matte", material: "Matte Polycarbonate" } }
+      );
+    }
+    const copyVariants = [
+      {
+        slug: "iphone-copy-transparent",
+        case_type: "transparent",
+        material: "Polycarbonate",
+        price: 349,
+        description: "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish show through.",
+        stock: 50,
+      },
+      {
+        slug: "iphone-copy-silicone",
+        case_type: "silicone",
+        material: "Liquid Silicone",
+        price: 299,
+        description: "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps.",
+        stock: 50,
+      },
+      {
+        slug: "iphone-copy-glass",
+        case_type: "glass",
+        material: "Tempered Glass",
+        price: 499,
+        description: "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Ultra-smooth glossy surface with high scratch resistance.",
+        stock: 30,
+      },
+    ];
+    for (const v of copyVariants) {
+      const existingVariant = await db.collection("template_products").findOne({
+        $or: [{ slug: v.slug }, { design_id: copyDesignId, case_type: v.case_type }],
+      });
+      if (!existingVariant) {
+        const ts = nowIso();
+        await db.collection("template_products").insertOne({
+          id: crypto.randomUUID(),
+          title: iphoneCopy.title,
+          slug: v.slug,
+          product_type: iphoneCopy.product_type || "original",
+          description: v.description,
+          short_description: v.description.slice(0, 120),
+          phone_brand: iphoneCopy.phone_brand || "Apple",
+          phone_models: Array.isArray(iphoneCopy.phone_models) ? iphoneCopy.phone_models : [],
+          category: iphoneCopy.category || "Minimal",
+          collection: iphoneCopy.collection || "Essentials",
+          case_type: v.case_type,
+          material: v.material,
+          price: v.price,
+          sale_price: null,
+          stock: v.stock,
+          variant_inventory: [],
+          sku: null,
+          tags: Array.isArray(iphoneCopy.tags) ? iphoneCopy.tags : [],
+          featured: false,
+          best_seller: false,
+          new_arrival: false,
+          status: "published",
+          rating: iphoneCopy.rating || 4.5,
+          review_count: 0,
+          seo: iphoneCopy.seo || {},
+          thumbnail: iphoneCopy.thumbnail,
+          images: Array.isArray(iphoneCopy.images) ? iphoneCopy.images : [],
+          design_id: copyDesignId,
+          order_count: 0,
+          created_at: ts,
+          updated_at: ts,
+        });
+      }
+    }
+  }
 }
+
 
 async function main() {
   if (!MONGO_URL || !DB_NAME || !JWT_SECRET || !process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD) {

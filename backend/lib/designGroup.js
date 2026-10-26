@@ -99,6 +99,7 @@ function toPublicMaterialVariant(doc, canonical, labelMap = {}) {
   const ownImages = variantHasOwnImages(doc, canonical);
   return {
     id: product.id,
+    title: product.title,
     slug: product.slug,
     case_type: product.case_type,
     case_type_key: caseTypeKey(product.case_type),
@@ -117,6 +118,8 @@ function toPublicMaterialVariant(doc, canonical, labelMap = {}) {
     thumbnail: ownImages ? product.thumbnail : null,
     images: ownImages ? product.images : null,
     has_variant_image: ownImages,
+    phone_models: Array.isArray(product.phone_models) ? product.phone_models : [],
+    status: product.status || "published",
   };
 }
 

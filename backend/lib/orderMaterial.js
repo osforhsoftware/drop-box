@@ -1,4 +1,5 @@
 const { caseTypeLabelFromMap } = require("./designGroup");
+const { CASE_TYPE_ALIASES } = require("./templateProducts");
 
 function buildCaseTypeLabelMap(docs) {
   const map = {};
@@ -13,16 +14,39 @@ function buildCaseTypeLabelMap(docs) {
 function snapshotOrderMaterial(line, labelMap = {}) {
   const template = line?.templateProduct || {};
   const product = line?.product || {};
+  const isGenericProduct = !product.slug || product.slug === "generic";
+
   const case_type = String(
-    template.case_type || product.slug || line?.case_type || ""
+    (!isGenericProduct ? product.slug : null) ||
+    template.case_type ||
+    product.slug ||
+    line?.case_type ||
+    ""
   ).trim() || null;
-  const material = String(template.material || line?.material || "").trim() || null;
+
+  const tCase = String(template.case_type || "").trim().toLowerCase();
+  const pSlug = String(product.slug || "").trim().toLowerCase();
+  const isDefaultMaterial = Boolean(
+    tCase && pSlug && (tCase === pSlug || CASE_TYPE_ALIASES?.[tCase]?.includes(pSlug))
+  );
+
+  const material = String(
+    product.material ||
+    (isDefaultMaterial ? template.material : null) ||
+    line?.material ||
+    (!isGenericProduct && product.name ? product.name : null) ||
+    template.material ||
+    ""
+  ).trim() || null;
+
   const case_type_label = String(
-    line?.case_type_label
-    || caseTypeLabelFromMap(case_type, labelMap)
-    || product.name
-    || ""
+    line?.case_type_label ||
+    (!isGenericProduct && product.name ? product.name : null) ||
+    caseTypeLabelFromMap(case_type, labelMap) ||
+    product.name ||
+    ""
   ).trim() || null;
+
   return { case_type, case_type_label, material };
 }
 

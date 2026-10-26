@@ -22,6 +22,22 @@ describe("orderMaterial", () => {
     });
   });
 
+  it("uses selected catalog product material when a non-default case type is chosen", () => {
+    const labelMap = buildCaseTypeLabelMap([
+      { slug: "transparent-case", name: "Transparent Case" },
+      { slug: "silicone", name: "Silicone Case" },
+    ]);
+    const snap = snapshotOrderMaterial({
+      templateProduct: { case_type: "silicone", material: "Silicone" },
+      product: { name: "Transparent Case", slug: "transparent-case", material: "Polycarbonate" },
+    }, labelMap);
+    assert.deepEqual(snap, {
+      case_type: "transparent-case",
+      case_type_label: "Transparent Case",
+      material: "Polycarbonate",
+    });
+  });
+
   it("falls back to catalog product name for older lines", () => {
     assert.equal(orderMaterialLabel({ product_name: "Matte Case" }), "Matte Case");
     assert.equal(

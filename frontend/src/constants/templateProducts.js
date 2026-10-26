@@ -66,8 +66,66 @@ export function formatPrice(amount) {
   return `₹${Number(amount || 0).toLocaleString("en-IN")}`;
 }
 
+export const CASE_TYPE_ALIASES = {
+  silicone: ["silicone", "silicone-case"],
+  "silicone-case": ["silicone", "silicone-case"],
+  matte: ["matte", "matte-case", "test-case-type"],
+  "matte-case": ["matte", "matte-case", "test-case-type"],
+  "test-case-type": ["matte", "matte-case", "test-case-type"],
+  transparent: ["transparent", "transparent-case"],
+  "transparent-case": ["transparent", "transparent-case"],
+  glass: ["glass", "glass-case"],
+  "glass-case": ["glass", "glass-case"],
+  "oil-green": ["oil-green"],
+  gts: ["gts"],
+};
+
 export function caseTypeLabel(slug) {
-  return TEMPLATE_CASE_TYPES.find((c) => c.slug === slug)?.label || slug;
+  const s = String(slug || "").toLowerCase().trim();
+  if (s === "test-case-type") return "Matte";
+  const found = TEMPLATE_CASE_TYPES.find((c) => c.slug === s || c.slug === s.replace(/-case$/, ""));
+  if (found) return found.label;
+  if (s === "oil-green") return "Oil green";
+  return slug || "";
+}
+
+export function matchesTemplate(p, caseType) {
+  if (!p || !caseType) return false;
+  const ct = String(caseType).toLowerCase().trim();
+  const ps = String(p.slug || "").toLowerCase().trim();
+  const pn = String(p.name || "").toLowerCase().trim();
+  if (ps === ct || pn === ct) return true;
+  const aliases = CASE_TYPE_ALIASES[ct];
+  if (aliases && (aliases.includes(ps) || aliases.includes(pn))) return true;
+  const pAliases = CASE_TYPE_ALIASES[ps];
+  if (pAliases && (pAliases.includes(ct) || pAliases.includes(pn))) return true;
+  const ctNorm = ct.replace(/-case$/, "");
+  const psNorm = ps.replace(/-case$/, "");
+  if (ctNorm && psNorm && ctNorm === psNorm) return true;
+  return false;
+}
+
+export function isMaterialCompatibleWithModel(variant, model, parentTemplate = null) {
+  if (!variant || !model) return false;
+  if (variant.status && variant.status !== "published") return false;
+
+  const targetModels = Array.isArray(variant.phone_models) && variant.phone_models.length > 0
+    ? variant.phone_models
+    : (parentTemplate && !Array.isArray(parentTemplate) && Array.isArray(parentTemplate.phone_models) && parentTemplate.phone_models.length > 0
+        ? parentTemplate.phone_models
+        : null);
+
+  if (targetModels && targetModels.length > 0) {
+    const modelNameLower = String(model?.name || model || "").trim().toLowerCase();
+    const modelIdLower = String(model?.id || "").trim().toLowerCase();
+    const isModelInVariant = targetModels.some((m) => {
+      const s = String(m).trim().toLowerCase();
+      return s === modelNameLower || s === modelIdLower;
+    });
+    if (!isModelInVariant) return false;
+  }
+
+  return true;
 }
 
 export function productTypeLabel(slug) {
@@ -137,6 +195,7 @@ export function listMaterialVariants(product) {
   if (!product) return [];
   return [{
     id: product.id,
+    title: product.title,
     slug: product.slug,
     case_type: product.case_type,
     case_type_label: caseTypeLabel(product.case_type),
@@ -170,6 +229,7 @@ export function productFromMaterial(template, variant) {
   if (!variant || variant.id === template.id) {
     return {
       ...template,
+      title: variant?.title || template.title,
       effective_price: variant?.effective_price ?? template.effective_price ?? template.sale_price ?? template.price,
       variants: variant?.variants || template.variants,
       variant_inventory: variant?.variants || template.variant_inventory,
@@ -178,6 +238,7 @@ export function productFromMaterial(template, variant) {
   return {
     ...template,
     id: variant.id,
+    title: variant.title || template.title,
     slug: variant.slug,
     case_type: variant.case_type,
     material: variant.material,
@@ -195,6 +256,162 @@ export function productFromMaterial(template, variant) {
     thumbnail: variant.has_variant_image && variant.thumbnail ? variant.thumbnail : template.thumbnail,
     images: variant.has_variant_image && variant.images?.length ? variant.images : template.images,
   };
+}
+
+export function getUpdatedTemplateTitle(template, selectedVariant, selectedProduct) {
+  if (!template) return "";
+  const baseTitle = displayTemplateTitle(template.title);
+
+  if (selectedVariant && selectedVariant.id !== template.id && selectedVariant.title) {
+    const variantTitle = displayTemplateTitle(selectedVariant.title);
+    if (variantTitle && variantTitle !== baseTitle) {
+      return variantTitle;
+    }
+  }
+
+  const newMaterialName = selectedProduct?.name
+    || selectedVariant?.case_type_label
+    || (selectedVariant?.case_type ? caseTypeLabel(selectedVariant.case_type) : "");
+
+  if (!newMaterialName) return baseTitle;
+
+  const baseCaseType = String(template.case_type || "").trim();
+  const baseCaseLabel = caseTypeLabel(baseCaseType);
+  const baseMaterial = String(template.material || "").trim();
+
+  const candidates = [
+    baseCaseLabel ? `${baseCaseLabel} Case` : null,
+    baseCaseLabel,
+    baseCaseType ? `${baseCaseType} case` : null,
+    baseCaseType ? `${baseCaseType.replace(/-case$/i, "")} case` : null,
+    baseMaterial && baseMaterial.toLowerCase() !== "case" ? `${baseMaterial} Case` : null,
+    baseCaseType ? baseCaseType.replace(/-case$/i, "") : null,
+    baseMaterial,
+  ].filter(Boolean);
+
+  const uniqueCandidates = [];
+  for (const c of candidates) {
+    const trimmed = String(c).trim();
+    if (trimmed && !uniqueCandidates.some((u) => u.toLowerCase() === trimmed.toLowerCase())) {
+      uniqueCandidates.push(trimmed);
+    }
+  }
+
+  uniqueCandidates.sort((a, b) => b.length - a.length);
+
+  for (const candidate of uniqueCandidates) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    if (regex.test(baseTitle)) {
+      let replacement = newMaterialName;
+      if (!/case$/i.test(candidate) && /case$/i.test(newMaterialName)) {
+        replacement = newMaterialName.replace(/\s+Case$/i, "");
+      }
+      return baseTitle.replace(regex, replacement).replace(/\s{2,}/g, " ").trim();
+    }
+  }
+
+  return baseTitle;
+}
+
+export const MATERIAL_STANDARD_DESCRIPTIONS = {
+  silicone:
+    "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps, complete with precision cutouts and responsive button covers.",
+  transparent:
+    "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish and design show through while guarding against scratches and everyday impact.",
+  matte:
+    "Finished with a premium satin matte coating that actively resists fingerprints, oils, and surface smudges. Combines a sleek, low-profile silhouette with smooth tactile grip and durable daily edge protection.",
+  glass:
+    "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Features an ultra-smooth glossy surface with high scratch resistance for a clean, luxury look and premium hand feel.",
+  "oil-green":
+    "Crafted in a distinctive deep oil-green tone with a tactile soft-touch matte finish. Combines impact-absorbing corner protection with a smudge-resistant surface tailored for comfortable everyday handling.",
+};
+
+export function getMaterialStandardDescription(slugOrName) {
+  const raw = String(slugOrName || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("transparent") || raw.includes("clear")) return MATERIAL_STANDARD_DESCRIPTIONS.transparent;
+  if (raw.includes("silicone")) return MATERIAL_STANDARD_DESCRIPTIONS.silicone;
+  if (raw.includes("matte")) return MATERIAL_STANDARD_DESCRIPTIONS.matte;
+  if (raw.includes("glass")) return MATERIAL_STANDARD_DESCRIPTIONS.glass;
+  if (raw.includes("oil-green") || raw.includes("oil green")) return MATERIAL_STANDARD_DESCRIPTIONS["oil-green"];
+  const key = raw.replace(/-case$/i, "");
+  return MATERIAL_STANDARD_DESCRIPTIONS[key] || "";
+}
+
+function isPlaceholder(desc) {
+  if (!desc || typeof desc !== "string") return true;
+  const trimmed = desc.trim();
+  return !trimmed || /^(963|oky|test|case|placeholder|n\/a)$/i.test(trimmed);
+}
+
+function isSubstantialDescription(desc) {
+  if (!desc || typeof desc !== "string") return false;
+  const trimmed = desc.trim();
+  if (trimmed.length < 90) return false;
+  if (isPlaceholder(trimmed)) return false;
+  return true;
+}
+
+export function getUpdatedProductDescription(template, selectedVariant, selectedProduct, isDefaultMaterial) {
+  const targetKey =
+    selectedProduct?.slug ||
+    selectedProduct?.name ||
+    selectedVariant?.case_type ||
+    selectedVariant?.case_type_label ||
+    template?.case_type ||
+    "";
+  const standardDesc = getMaterialStandardDescription(targetKey);
+
+  if (isDefaultMaterial) {
+    const defaultDesc = template?.description || template?.short_description || "";
+    if (defaultDesc && !isPlaceholder(defaultDesc)) {
+      return defaultDesc;
+    }
+    return standardDesc || defaultDesc || "";
+  }
+
+  if (
+    selectedVariant &&
+    selectedVariant.id !== template?.id &&
+    selectedVariant.description &&
+    selectedVariant.description !== template?.description &&
+    isSubstantialDescription(selectedVariant.description)
+  ) {
+    return selectedVariant.description;
+  }
+
+  if (selectedProduct?.description && isSubstantialDescription(selectedProduct.description)) {
+    return selectedProduct.description;
+  }
+
+  if (standardDesc) {
+    return standardDesc;
+  }
+
+  return (
+    selectedProduct?.description ||
+    selectedVariant?.description ||
+    template?.description ||
+    template?.short_description ||
+    ""
+  );
+}
+
+export function getMaterialSpecification(selectedProduct, activeTemplate, template, isDefaultMaterial) {
+  if (selectedProduct?.material) return selectedProduct.material;
+  if (isDefaultMaterial && (activeTemplate?.material || template?.material)) {
+    return activeTemplate?.material || template?.material;
+  }
+  if (selectedProduct?.name) {
+    const n = selectedProduct.name.toLowerCase();
+    if (n.includes("silicone")) return "Liquid Silicone";
+    if (n.includes("transparent") || n.includes("clear")) return "Polycarbonate";
+    if (n.includes("matte")) return "Matte Polycarbonate";
+    if (n.includes("glass")) return "Tempered Glass";
+    return selectedProduct.name;
+  }
+  return activeTemplate?.material || template?.material || "Premium UV print";
 }
 
 export function maxPurchasableQuantity(product, modelName) {

@@ -8,13 +8,14 @@ export function startTemplateCheckout({
   product,
   mockupTemplateId = null,
   quantity = 1,
+  price: explicitPrice,
 }) {
   if (!brand?.id || !model?.id || !product?.id) {
     throw new Error("Selected device (brand, model) and case type are required");
   }
 
   const designUrl = template.thumbnail || template.images?.[0];
-  const price = template.effective_price ?? template.sale_price ?? template.price;
+  const price = explicitPrice ?? product.price ?? template.effective_price ?? template.sale_price ?? template.price;
   const pricedProduct = { ...product, price };
   const line = {
     cart_id: crypto.randomUUID(),

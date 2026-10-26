@@ -137,11 +137,14 @@ test("material variants keep their own price, description, and stock", () => {
     ],
   });
   const variant = toPublicMaterialVariant(glass, canonical, { glass: { label: "Glass Case" } });
+  assert.equal(variant.title, "Mountain Design");
   assert.equal(variant.effective_price, 499);
   assert.equal(variant.description, "Premium glass-finish phone case.");
   assert.equal(variant.in_stock, false);
   assert.equal(variant.case_type_label, "Glass Case");
   assert.equal(variant.has_variant_image, false);
+  assert.deepEqual(variant.phone_models, ["iPhone 15"]);
+  assert.equal(variant.status, "published");
 });
 
 test("silicone and silicone-case are the same material for uniqueness checks", () => {
