@@ -68,6 +68,7 @@ const {
   COLLECTIONS,
   PHONE_BRANDS,
   PRODUCT_TYPES,
+  CASE_TYPE_ALIASES,
 } = require("./lib/templateProducts");
 const {
   resolveVariantInventory,
@@ -395,7 +396,14 @@ async function resolveCatalogLine(line) {
       err.status = 400;
       throw err;
     }
-    price = effectivePrice(templateProduct);
+    const tCase = String(templateProduct.case_type || "").trim().toLowerCase();
+    const pSlug = String(product.slug || "").trim().toLowerCase();
+    const isDefaultMaterial = tCase === pSlug || Boolean(CASE_TYPE_ALIASES[tCase]?.includes(pSlug));
+    if (isDefaultMaterial) {
+      price = effectivePrice(templateProduct);
+    } else {
+      price = Number(relation.price);
+    }
   }
 
   return { brand, model, product, relation, templateProduct, price };

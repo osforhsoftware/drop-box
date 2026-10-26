@@ -555,6 +555,7 @@ module.exports = {
   buildAdminListFilter,
   buildSort,
   effectivePrice,
+  CASE_TYPE_ALIASES,
   isTrashed,
   notTrashedClause,
   trashedClause,
