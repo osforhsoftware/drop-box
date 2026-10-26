@@ -12,6 +12,7 @@ import BottomNav from "./components/BottomNav";
 import WhatsAppFloat from "./components/WhatsAppFloat";
 import RequireAuth from "./components/RequireAuth";
 import ScrollToTop from "./components/ScrollToTop";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import "./App.css";
 
@@ -67,55 +68,57 @@ function App() {
           <ScrollToTop />
           <Header />
           <div className="public-content mobile-nav-spacer md:pb-0">
-            <Suspense fallback={<PageFallback />}>
-              <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/shop" element={<Shop />} />
-                <Route path="/template/:slug" element={<TemplateDetail />} />
-                <Route path="/cart" element={<Cart />} />
-                <Route path="/customize" element={<Customize />} />
+            <ErrorBoundary>
+              <Suspense fallback={<PageFallback />}>
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/shop" element={<Shop />} />
+                  <Route path="/template/:slug" element={<TemplateDetail />} />
+                  <Route path="/cart" element={<Cart />} />
+                  <Route path="/customize" element={<Customize />} />
 
-                <Route path="/checkout" element={<RequireAuth><Checkout /></RequireAuth>} />
-                <Route path="/payment/:orderId" element={<RequireAuth><Payment /></RequireAuth>} />
-                <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+                  <Route path="/checkout" element={<RequireAuth><Checkout /></RequireAuth>} />
+                  <Route path="/payment/:orderId" element={<RequireAuth><Payment /></RequireAuth>} />
+                  <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
 
-                <Route path="/wishlist" element={<Wishlist />} />
-                <Route path="/about" element={<About />} />
-                <Route path="/contact" element={<Contact />} />
-                <Route path="/faq" element={<FAQ />} />
-                <Route path="/privacy" element={<PrivacyPolicy />} />
-                <Route path="/terms" element={<Terms />} />
-                <Route path="/returns" element={<Returns />} />
-                <Route path="/shipping" element={<ShippingPolicy />} />
-                <Route path="/gallery" element={<CustomerGallery />} />
-                <Route path="/gallery/upload" element={<RequireAuth><GalleryUpload /></RequireAuth>} />
-                <Route path="/track" element={<OrderStatus />} />
-                <Route path="/track/:orderId" element={<OrderStatus />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
+                  <Route path="/wishlist" element={<Wishlist />} />
+                  <Route path="/about" element={<About />} />
+                  <Route path="/contact" element={<Contact />} />
+                  <Route path="/faq" element={<FAQ />} />
+                  <Route path="/privacy" element={<PrivacyPolicy />} />
+                  <Route path="/terms" element={<Terms />} />
+                  <Route path="/returns" element={<Returns />} />
+                  <Route path="/shipping" element={<ShippingPolicy />} />
+                  <Route path="/gallery" element={<CustomerGallery />} />
+                  <Route path="/gallery/upload" element={<RequireAuth><GalleryUpload /></RequireAuth>} />
+                  <Route path="/track" element={<OrderStatus />} />
+                  <Route path="/track/:orderId" element={<OrderStatus />} />
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/register" element={<Register />} />
 
-                <Route path="/casebox-login" element={<AdminLogin />} />
-                <Route path="/admin/login" element={<Navigate to="/casebox-login" replace />} />
-                <Route path="/admin" element={<AdminLayout />}>
-                  <Route index element={<AdminDashboard />} />
-                  <Route path="orders" element={<AdminOrders />} />
-                  <Route path="failed-payments" element={<AdminFailedPayments />} />
-                  <Route path="users" element={<AdminUsers />} />
-                  <Route path="contact" element={<AdminContact />} />
-                  <Route path="catalog" element={<AdminCatalog />} />
-                  <Route path="catalog/templates" element={<AdminTemplates />} />
-                  <Route path="case-types" element={<AdminCaseTypes />} />
-                  <Route path="template-products" element={<AdminTemplateProducts />} />
-                  <Route path="promo-codes" element={<AdminPromoCodes />} />
-                  <Route path="popup-offers" element={<AdminPopupOffers />} />
-                  <Route path="hero-slides" element={<AdminHeroSlides />} />
-                  <Route path="customer-gallery" element={<AdminCustomerGallery />} />
-                  <Route path="settings" element={<AdminSettings />} />
-                </Route>
+                  <Route path="/casebox-login" element={<AdminLogin />} />
+                  <Route path="/admin/login" element={<Navigate to="/casebox-login" replace />} />
+                  <Route path="/admin" element={<AdminLayout />}>
+                    <Route index element={<AdminDashboard />} />
+                    <Route path="orders" element={<AdminOrders />} />
+                    <Route path="failed-payments" element={<AdminFailedPayments />} />
+                    <Route path="users" element={<AdminUsers />} />
+                    <Route path="contact" element={<AdminContact />} />
+                    <Route path="catalog" element={<AdminCatalog />} />
+                    <Route path="catalog/templates" element={<AdminTemplates />} />
+                    <Route path="case-types" element={<AdminCaseTypes />} />
+                    <Route path="template-products" element={<AdminTemplateProducts />} />
+                    <Route path="promo-codes" element={<AdminPromoCodes />} />
+                    <Route path="popup-offers" element={<AdminPopupOffers />} />
+                    <Route path="hero-slides" element={<AdminHeroSlides />} />
+                    <Route path="customer-gallery" element={<AdminCustomerGallery />} />
+                    <Route path="settings" element={<AdminSettings />} />
+                  </Route>
 
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
             <Footer />
           </div>
           <BottomNav />

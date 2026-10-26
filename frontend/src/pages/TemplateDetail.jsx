@@ -10,6 +10,12 @@ import {
   isModelOutOfStock,
   listMaterialVariants,
   productFromMaterial,
+  displayTemplateTitle,
+  getUpdatedTemplateTitle,
+  getUpdatedProductDescription,
+  getMaterialSpecification,
+  matchesTemplate,
+  isMaterialCompatibleWithModel,
 } from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
 import { partitionTags } from "../constants/colorSwatch";
@@ -39,27 +45,6 @@ export default function TemplateDetail() {
   const [buying, setBuying] = useState(false);
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [actionError, setActionError] = useState("");
-
-  const CASE_TYPE_ALIASES = {
-    silicone: ["silicone", "silicone-case"],
-    "silicone-case": ["silicone", "silicone-case"],
-    matte: ["matte", "matte-case"],
-    "matte-case": ["matte", "matte-case"],
-    transparent: ["transparent", "transparent-case"],
-    "transparent-case": ["transparent", "transparent-case"],
-    glass: ["glass"],
-    "oil-green": ["oil-green"],
-  };
-
-  const matchesTemplate = (p, caseType) => {
-    if (!p || !caseType) return false;
-    const ct = String(caseType).toLowerCase().trim();
-    const ps = String(p.slug || "").toLowerCase().trim();
-    const pn = String(p.name || "").toLowerCase().trim();
-    if (ps === ct || pn === ct) return true;
-    const aliases = CASE_TYPE_ALIASES[ct];
-    return Boolean(aliases && (aliases.includes(ps) || aliases.includes(pn)));
-  };
 
   const loadProducts = async (bId, mId, tpl) => {
     if (!bId || !mId) {
@@ -103,16 +88,33 @@ export default function TemplateDetail() {
         setTemplate(r.data);
         setSelectedMaterialId(r.data.id);
         const brandsRes = await api.get("/brands");
-        const brandList = brandsRes.data || [];
-        setBrands(brandList);
-        const brand = brandList.find((b) => b.name === r.data.phone_brand) || brandList[0];
+        const allBrands = brandsRes.data || [];
+
+        // Show only compatible brand configured for this template
+        const targetBrandName = r.data.phone_brand;
+        const matchedBrand = allBrands.find(
+          (b) => b.name?.toLowerCase() === targetBrandName?.toLowerCase() || b.id === targetBrandName
+        );
+        const availableBrands = matchedBrand ? [matchedBrand] : allBrands;
+        setBrands(availableBrands);
+
+        const brand = matchedBrand || allBrands[0];
         if (brand) {
           setBrandId(brand.id);
           const modelsRes = await api.get("/models", { params: { brand_id: brand.id } });
-          const modelList = modelsRes.data || [];
-          setModels(modelList);
-          const modelName = r.data.phone_models?.[0];
-          const model = modelList.find((m) => m.name === modelName) || modelList[0];
+          const allModels = modelsRes.data || [];
+
+          // Show only compatible models configured for this template
+          const targetModels = Array.isArray(r.data.phone_models) && r.data.phone_models.length > 0
+            ? new Set(r.data.phone_models.map((m) => String(m).trim().toLowerCase()))
+            : null;
+          const compatibleModels = targetModels
+            ? allModels.filter((m) => targetModels.has(String(m.name).trim().toLowerCase()))
+            : allModels;
+          setModels(compatibleModels);
+
+          const defaultModelName = r.data.phone_models?.[0];
+          const model = (defaultModelName && compatibleModels.find((m) => m.name.toLowerCase() === defaultModelName.toLowerCase())) || compatibleModels[0];
           if (model) {
             setModelId(model.id);
             await loadProducts(brand.id, model.id, r.data);
@@ -132,11 +134,17 @@ export default function TemplateDetail() {
     if (!nextBrandId) return;
     try {
       const modelsRes = await api.get("/models", { params: { brand_id: nextBrandId } });
-      const modelList = modelsRes.data || [];
-      setModels(modelList);
-      if (modelList[0]) {
-        setModelId(modelList[0].id);
-        await loadProducts(nextBrandId, modelList[0].id, template);
+      const allModels = modelsRes.data || [];
+      const targetModels = Array.isArray(activeTemplate?.phone_models) && activeTemplate.phone_models.length > 0
+        ? new Set(activeTemplate.phone_models.map((m) => String(m).trim().toLowerCase()))
+        : null;
+      const compatibleModels = targetModels
+        ? allModels.filter((m) => targetModels.has(String(m.name).trim().toLowerCase()))
+        : allModels;
+      setModels(compatibleModels);
+      if (compatibleModels[0]) {
+        setModelId(compatibleModels[0].id);
+        await loadProducts(nextBrandId, compatibleModels[0].id, activeTemplate);
       }
     } catch {
       setModels([]);
@@ -149,24 +157,48 @@ export default function TemplateDetail() {
     setProducts([]);
     setProductId("");
     if (!nextModelId || !brandId) return;
-    await loadProducts(brandId, nextModelId, template);
+    await loadProducts(brandId, nextModelId, activeTemplate || template);
   };
 
   const materials = listMaterialVariants(template);
-  const selectedVariant = materials.find((item) => item.id === selectedMaterialId) || materials[0];
+  const selectedModel = models.find((m) => m.id === modelId);
+
+  // Filter material variants compatible with the chosen model using explicit template configuration
+  const compatibleMaterials = selectedModel
+    ? materials.filter((m) => isMaterialCompatibleWithModel(m, selectedModel, template))
+    : materials;
+
+  const showMaterialSelector = compatibleMaterials.length > 1;
+  const noCompatibleMaterial = Boolean(selectedModel && compatibleMaterials.length === 0);
+
+  // Auto-select valid compatible material when brand or model changes
+  useEffect(() => {
+    if (!compatibleMaterials.length) return;
+    if (!compatibleMaterials.some((m) => m.id === selectedMaterialId)) {
+      setSelectedMaterialId(compatibleMaterials[0].id);
+    }
+  }, [compatibleMaterials, selectedMaterialId]);
+
+  const selectedVariant = (compatibleMaterials.length > 0 ? compatibleMaterials : materials).find(
+    (item) => item.id === selectedMaterialId
+  ) || compatibleMaterials[0] || materials[0];
+
   const activeTemplate = productFromMaterial(template, selectedVariant) || template;
 
-  const selectedProduct = products.find((p) => p.id === productId) || products[0];
-  const selectedModel = models.find((m) => m.id === modelId);
+  const selectedProduct = products.find((p) => matchesTemplate(p, selectedVariant?.case_type))
+    || products.find((p) => matchesTemplate(p, activeTemplate?.case_type))
+    || products[0];
+
   const selectedOutOfStock = Boolean(
     activeTemplate && selectedModel && isModelOutOfStock(activeTemplate, selectedModel.name)
   );
+
+  const canBuy = !buying && modelId && !noCompatibleMaterial && !selectedOutOfStock && (selectedVariant?.stock == null || Number(selectedVariant.stock) > 0);
 
   const handleMaterialSelect = (variant) => {
     if (!variant) return;
     setSelectedMaterialId(variant.id);
     setActionError("");
-    if (variant.has_variant_image) setGalleryIdx(0);
     if (products.length > 0) {
       const matched = products.find((p) => matchesTemplate(p, variant.case_type));
       if (matched) setProductId(matched.id);
@@ -180,28 +212,46 @@ export default function TemplateDetail() {
     const matched = materials.find((v) => matchesTemplate(p, v.case_type));
     if (matched) {
       setSelectedMaterialId(matched.id);
-      if (matched.has_variant_image) setGalleryIdx(0);
     }
   };
 
-  const getMaterialPrice = (p) => {
-    if (!p) return activeTemplate?.effective_price ?? template?.effective_price ?? template?.sale_price ?? template?.price ?? 0;
-    const isDefault = matchesTemplate(p, activeTemplate?.case_type || template?.case_type);
-    if (isDefault && (activeTemplate?.effective_price != null || template?.effective_price != null || template?.sale_price != null || template?.price != null)) {
-      return activeTemplate?.effective_price ?? template.effective_price ?? template.sale_price ?? template.price;
+  useEffect(() => {
+    if (selectedVariant?.has_variant_image) {
+      setGalleryIdx(0);
     }
-    return p.price ?? (activeTemplate?.effective_price ?? template?.effective_price ?? template?.sale_price ?? template?.price ?? 0);
-  };
+  }, [selectedVariant?.id]);
 
-  const currentPrice = selectedProduct
-    ? getMaterialPrice(selectedProduct)
-    : (activeTemplate?.effective_price ?? template?.effective_price ?? template?.sale_price ?? template?.price ?? 0);
+  const currentPrice = selectedVariant?.effective_price ?? selectedVariant?.sale_price ?? selectedVariant?.price ?? template?.effective_price ?? template?.sale_price ?? template?.price ?? 0;
 
   const isDefaultMaterialSelected = Boolean(
-    selectedProduct && matchesTemplate(selectedProduct, activeTemplate?.case_type || template?.case_type)
+    !selectedVariant || selectedVariant.id === template?.id || selectedVariant.case_type === template?.case_type
   );
 
+  const displayTitle = getUpdatedTemplateTitle(template, selectedVariant, selectedProduct);
+  const displayDescription = selectedVariant?.description?.trim()
+    || selectedProduct?.description?.trim()
+    || template?.description?.trim()
+    || "";
+  const selectedMaterialLabel =
+    selectedVariant?.case_type_label ||
+    (selectedVariant?.case_type ? caseTypeLabel(selectedVariant.case_type) : "") ||
+    selectedProduct?.name ||
+    (activeTemplate?.case_type ? caseTypeLabel(activeTemplate.case_type) : "");
+  const displayCaseType =
+    selectedVariant?.case_type_label ||
+    selectedMaterialLabel ||
+    (activeTemplate?.case_type ? caseTypeLabel(activeTemplate.case_type) : "");
+  const displayMaterial = selectedVariant?.material
+    || selectedProduct?.material
+    || getMaterialSpecification(selectedProduct, selectedVariant, template, isDefaultMaterialSelected)
+    || template?.material
+    || "";
+
   const handleAddToCart = async () => {
+    if (noCompatibleMaterial) {
+      setActionError(`No compatible case materials are available for ${selectedModel?.name || "this model"}`);
+      return;
+    }
     if (!brandId || !modelId) {
       setActionError("Please select your brand and model");
       return;
@@ -212,33 +262,63 @@ export default function TemplateDetail() {
       setActionError("Device selection missing");
       return;
     }
+    if (activeTemplate?.phone_brand && brand.name.toLowerCase() !== activeTemplate.phone_brand.toLowerCase()) {
+      setActionError(`This case is not available for ${brand.name}`);
+      return;
+    }
+    if (Array.isArray(activeTemplate?.phone_models) && activeTemplate.phone_models.length > 0) {
+      const isCompat = activeTemplate.phone_models.some(
+        (m) => String(m).trim().toLowerCase() === String(model.name).trim().toLowerCase()
+      );
+      if (!isCompat) {
+        setActionError(`This design is not available for ${model.name}`);
+        return;
+      }
+    }
     if (isModelOutOfStock(activeTemplate, model.name)) {
       toast.error(`${model.name} is out of stock for this material`);
       return;
     }
-    const productToUse = selectedProduct;
-    if (products.length > 0 && !productToUse) {
-      setActionError("Please select a case material");
-      return;
-    }
+
     try {
-      let resolvedProduct = productToUse;
-      if (!resolvedProduct) {
+      let resolvedProduct = selectedProduct;
+      if (!resolvedProduct && brandId && modelId) {
         const productsRes = await api.get("/products", {
           params: { brand_id: brandId, model_id: modelId },
         });
         resolvedProduct =
-          productsRes.data.find((p) => p.slug === activeTemplate.case_type)
+          productsRes.data.find((p) => matchesTemplate(p, activeTemplate.case_type))
           || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === String(activeTemplate.case_type || "").replace(/-case$/, ""))
           || productsRes.data[0];
       }
-      if (!resolvedProduct) throw new Error("Case type unavailable for this device");
+      if (!resolvedProduct) {
+        resolvedProduct = {
+          id: activeTemplate.id,
+          name: selectedMaterialLabel || activeTemplate.title,
+          slug: activeTemplate.case_type,
+          price: currentPrice,
+        };
+      }
 
-      const designUrl = activeTemplate.thumbnail || activeTemplate.images?.[0] || template.thumbnail || template.images?.[0];
-      const itemPrice = getMaterialPrice(resolvedProduct);
+      const designUrl = (selectedVariant?.has_variant_image && selectedVariant.thumbnail)
+        || activeTemplate.thumbnail
+        || activeTemplate.images?.[0]
+        || template.thumbnail
+        || template.images?.[0];
+      const itemPrice = currentPrice;
+      const materialName = selectedMaterialLabel || resolvedProduct?.name || activeTemplate.title;
 
       addToCart({
-        template_product: activeTemplate,
+        template_product: {
+          ...activeTemplate,
+          title: displayTitle,
+          description: displayDescription,
+          case_type: activeTemplate.case_type || resolvedProduct?.slug,
+          case_type_label: materialName,
+          material: displayMaterial,
+          price: currentPrice,
+          effective_price: currentPrice,
+        },
         template_product_id: activeTemplate.id,
         brand,
         model,
@@ -248,14 +328,21 @@ export default function TemplateDetail() {
         quantity: 1,
       });
 
-      const materialName = resolvedProduct.name || selectedVariant?.case_type_label || caseTypeLabel(activeTemplate.case_type);
-      toast.success(`Added ${materialName} for ${brand.name} ${model.name}`);
+      toast.success(
+        brand && model
+          ? `Added ${materialName} for ${brand.name} ${model.name}`
+          : `Added ${materialName} to cart`
+      );
     } catch {
       setActionError("Could not add to cart. Please select a phone model available for this case.");
     }
   };
 
   const handlePurchase = async () => {
+    if (noCompatibleMaterial) {
+      setActionError(`No compatible case materials are available for ${selectedModel?.name || "this model"}`);
+      return;
+    }
     if (!brandId || !modelId) {
       setActionError("Please select your brand and model");
       return;
@@ -266,45 +353,72 @@ export default function TemplateDetail() {
       setActionError("Device selection missing");
       return;
     }
+    if (activeTemplate?.phone_brand && brand.name.toLowerCase() !== activeTemplate.phone_brand.toLowerCase()) {
+      setActionError(`This case is not available for ${brand.name}`);
+      return;
+    }
+    if (Array.isArray(activeTemplate?.phone_models) && activeTemplate.phone_models.length > 0) {
+      const isCompat = activeTemplate.phone_models.some(
+        (m) => String(m).trim().toLowerCase() === String(model.name).trim().toLowerCase()
+      );
+      if (!isCompat) {
+        setActionError(`This design is not available for ${model.name}`);
+        return;
+      }
+    }
     if (isModelOutOfStock(activeTemplate, model.name)) {
       toast.error(`${model.name} is out of stock for this material`);
       return;
     }
-    const productToUse = selectedProduct;
-    if (products.length > 0 && !productToUse) {
-      setActionError("Please select a case material");
-      return;
-    }
+
     setBuying(true);
     setActionError("");
     try {
-      let resolvedProduct = productToUse;
-      if (!resolvedProduct) {
+      let resolvedProduct = selectedProduct;
+      if (!resolvedProduct && brandId && modelId) {
         const productsRes = await api.get("/products", {
           params: { brand_id: brandId, model_id: modelId },
         });
         resolvedProduct =
-          productsRes.data.find((p) => p.slug === activeTemplate.case_type)
+          productsRes.data.find((p) => matchesTemplate(p, activeTemplate.case_type))
           || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === String(activeTemplate.case_type || "").replace(/-case$/, ""))
           || productsRes.data[0];
       }
       if (!resolvedProduct) {
-        throw new Error("This case type is not available for the selected device");
+        resolvedProduct = {
+          id: activeTemplate.id,
+          name: selectedMaterialLabel || activeTemplate.title,
+          slug: activeTemplate.case_type,
+          price: currentPrice,
+        };
       }
 
-      const itemPrice = getMaterialPrice(resolvedProduct);
+      const itemPrice = currentPrice;
       const pricedProduct = { ...resolvedProduct, price: itemPrice };
+      const materialName = selectedMaterialLabel || resolvedProduct?.name || activeTemplate.title;
 
       startTemplateCheckout({
-        template: activeTemplate,
+        template: {
+          ...activeTemplate,
+          title: displayTitle,
+          description: displayDescription,
+          case_type: activeTemplate.case_type || resolvedProduct?.slug,
+          case_type_label: materialName,
+          material: displayMaterial,
+          price: currentPrice,
+          effective_price: currentPrice,
+        },
         brand,
         model,
         product: pricedProduct,
         price: itemPrice,
         quantity: 1,
       });
-      const materialName = resolvedProduct.name || selectedVariant?.case_type_label || caseTypeLabel(activeTemplate.case_type);
-      toast.success(`Checkout for ${materialName} · ${brand.name} ${model.name}`);
+      toast.success(
+        brand && model
+          ? `Checkout for ${materialName} · ${brand.name} ${model.name}`
+          : `Checkout for ${materialName}`
+      );
       if (!user) {
         navigate("/login?next=/checkout");
         return;
@@ -341,12 +455,13 @@ export default function TemplateDetail() {
     );
   }
 
-  const gallerySource = selectedVariant?.has_variant_image ? activeTemplate : template;
-  const images = gallerySource.images?.length ? gallerySource.images : [gallerySource.thumbnail];
+  const activeVariantImages = selectedVariant?.has_variant_image && Array.isArray(selectedVariant.images) && selectedVariant.images.length > 0
+    ? selectedVariant.images
+    : (selectedVariant?.has_variant_image && selectedVariant.thumbnail ? [selectedVariant.thumbnail] : null);
+  const images = activeVariantImages || (template?.images?.length ? template.images : [template?.thumbnail]);
   const price = currentPrice;
   const currentImg = resolveMediaUrl(images[galleryIdx] || images[0]);
   const { colors: colorTags } = partitionTags(template.tags);
-  const selectedMaterialLabel = selectedProduct?.name || selectedVariant?.case_type_label || caseTypeLabel(activeTemplate.case_type);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-8 sm:py-10" data-testid="template-detail">
@@ -414,7 +529,7 @@ export default function TemplateDetail() {
           {template.collection && (
             <span className="label-eyebrow text-brand">{template.collection}</span>
           )}
-          <h1 className="font-display text-3xl lg:text-4xl">{template.title}</h1>
+          <h1 className="font-display text-3xl lg:text-4xl">{displayTitle}</h1>
 
           {template.rating > 0 && (
             <div className="flex items-center gap-2 text-sm">
@@ -455,41 +570,94 @@ export default function TemplateDetail() {
             + {formatPrice(SHIPPING_FEE)} shipping · Total {formatPrice(price + SHIPPING_FEE)}
           </p>
 
-          {materials.length > 1 && (
-            <div className="space-y-2" data-testid="material-select">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-medium text-sm">Material</h3>
-                <span className="text-xs text-white/50" data-testid="selected-material-label">
-                  {selectedMaterialLabel}
-                </span>
+          <p
+            className="text-base sm:text-[17px] text-white/85 leading-relaxed max-w-prose break-words py-0.5"
+            data-testid="product-description"
+          >
+            {displayDescription}
+          </p>
+
+          {/* Material selector - positioned neatly above Specifications, close to price & description */}
+          {showMaterialSelector && (
+            <div className="pt-1 space-y-2.5" data-testid="material-select">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-white/50 block font-medium uppercase tracking-wider">
+                  Select case material
+                </label>
+                {selectedVariant && (
+                  <span className="text-xs font-mono text-brand font-medium" data-testid="selected-material-label">
+                    {selectedVariant.case_type_label || caseTypeLabel(selectedVariant.case_type)}
+                  </span>
+                )}
               </div>
-              <div role="radiogroup" aria-label="Case material" className="flex flex-wrap gap-2">
-                {materials.map((variant) => {
-                  const selected = variant.id === selectedVariant?.id;
-                  const materialOut = selectedModel
-                    ? isModelOutOfStock({ ...variant, variants: variant.variants }, selectedModel.name)
-                    : variant.in_stock === false;
+
+              <div
+                role="radiogroup"
+                aria-label="Select case material"
+                className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5"
+              >
+                {compatibleMaterials.map((m) => {
+                  const isSelected = selectedVariant?.id === m.id || selectedVariant?.case_type === m.case_type;
+                  const matPrice = m.effective_price ?? m.sale_price ?? m.price ?? template.price;
+                  const matLabel = m.case_type_label || caseTypeLabel(m.case_type);
+                  const isOut = selectedModel
+                    ? isModelOutOfStock(m, selectedModel.name)
+                    : (m.stock != null && Number(m.stock) <= 0);
                   return (
                     <button
-                      key={variant.id}
+                      key={m.id || m.case_type}
                       type="button"
                       role="radio"
-                      aria-checked={selected}
-                      data-testid={`material-${variant.case_type}`}
-                      onClick={() => handleMaterialSelect(variant)}
-                      className={`rounded-xl px-3 py-2 text-left text-sm border transition-colors min-w-[8.5rem] ${
-                        selected
-                          ? "border-brand bg-brand/15 ring-2 ring-brand"
-                          : "border-white/10 bg-white/[0.03] hover:border-white/25"
+                      aria-checked={isSelected}
+                      aria-disabled={isOut}
+                      tabIndex={0}
+                      data-testid={`material-option-${m.case_type || m.id}`}
+                      onClick={() => handleMaterialSelect(m)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleMaterialSelect(m);
+                        }
+                      }}
+                      className={`group relative text-left p-2.5 sm:p-3 rounded-xl border transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand flex flex-col justify-between gap-1.5 ${
+                        isSelected
+                          ? "bg-brand/15 border-brand ring-1 ring-brand text-white shadow-[0_0_12px_rgba(109,177,97,0.18)]"
+                          : isOut
+                          ? "bg-white/[0.01] border-white/5 text-white/40 opacity-60"
+                          : "bg-white/[0.03] border-white/10 hover:border-white/20 hover:bg-white/[0.06] text-white/80"
                       }`}
                     >
-                      <span className="block font-medium">
-                        {variant.case_type_label || caseTypeLabel(variant.case_type)}
-                      </span>
-                      <span className="block text-xs text-white/55 mt-0.5">
-                        {formatPrice(variant.effective_price)}
-                        {materialOut ? " · Out of stock" : ""}
-                      </span>
+                      <div className="flex items-start justify-between gap-1 w-full">
+                        <span
+                          className={`text-xs sm:text-sm font-medium leading-tight line-clamp-1 ${
+                            isSelected ? "text-white" : "text-white/90"
+                          }`}
+                          title={matLabel}
+                        >
+                          {matLabel}
+                        </span>
+                        <span
+                          className={`w-3.5 h-3.5 rounded-full border shrink-0 mt-0.5 flex items-center justify-center transition-colors ${
+                            isSelected
+                              ? "border-brand bg-brand"
+                              : "border-white/30 group-hover:border-white/50"
+                          }`}
+                        >
+                          {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline justify-between w-full mt-0.5">
+                        <span
+                          className={`font-mono text-xs font-semibold ${
+                            isSelected ? "text-brand" : "text-brand/90"
+                          }`}
+                        >
+                          {formatPrice(matPrice)}
+                        </span>
+                        {isOut && (
+                          <span className="text-[10px] text-amber-400 font-medium">Out of stock</span>
+                        )}
+                      </div>
                     </button>
                   );
                 })}
@@ -497,20 +665,32 @@ export default function TemplateDetail() {
             </div>
           )}
 
-          <p className="text-white/60 leading-relaxed" data-testid="product-description">
-            {activeTemplate.description || activeTemplate.short_description || template.description || template.short_description}
-          </p>
+          {!showMaterialSelector && compatibleMaterials.length === 1 && (
+            <div className="pt-0.5 flex items-center gap-2 text-xs text-white/70" data-testid="single-material-info">
+              <span className="text-white/40 uppercase tracking-wider font-medium text-[11px]">Material:</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-white font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand" />
+                {selectedMaterialLabel} · {formatPrice(currentPrice)}
+              </span>
+            </div>
+          )}
+
+          {noCompatibleMaterial && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-300" data-testid="no-materials-alert">
+              No case materials are available for {selectedModel?.name || "this model"}. Please select another phone model.
+            </div>
+          )}
 
           <div className="glass rounded-2xl p-5 space-y-3 text-sm">
             <h3 className="font-medium">Specifications</h3>
             <dl className="grid grid-cols-2 gap-3 text-white/60">
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Case type</dt>
-                <dd>{selectedProduct?.name || selectedMaterialLabel || caseTypeLabel(template.case_type)}</dd>
+                <dd>{displayCaseType}</dd>
               </div>
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Material</dt>
-                <dd>{selectedProduct?.name || activeTemplate?.material || template.material || "Premium UV print"}</dd>
+                <dd>{displayMaterial}</dd>
               </div>
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Brand</dt>
@@ -528,131 +708,49 @@ export default function TemplateDetail() {
                   </dd>
                 </div>
               )}
-              <div className="col-span-2">
-                <dt className="text-white/40 text-xs uppercase tracking-wider">Compatible models</dt>
-                <dd>{template.phone_models?.join(", ") || "All models for brand"}</dd>
-              </div>
+              {Array.isArray(template.phone_models) && template.phone_models.length > 0 && (
+                <div className="col-span-2">
+                  <dt className="text-white/40 text-xs uppercase tracking-wider">Compatible models</dt>
+                  <dd>{(activeTemplate?.phone_models || template.phone_models || []).join(", ")}</dd>
+                </div>
+              )}
             </dl>
           </div>
 
           <div className="space-y-4" data-testid="device-select">
-            <h3 className="font-medium text-sm">Select your device</h3>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-white/50 mb-1.5 block">Brand</label>
-                <FilterSelect
-                  value={brandId}
-                  onChange={handleBrandChange}
-                  placeholder="Select brand"
-                  options={brands.map((b) => ({ value: b.id, label: b.name }))}
-                  testId="detail-brand-select"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-white/50 mb-1.5 block">Model</label>
-                <FilterSelect
-                  value={modelId}
-                  onChange={handleModelChange}
-                  placeholder={brandId ? "Select model" : "Select brand first"}
-                  options={models.map((m) => ({
-                    value: m.id,
-                    label: activeTemplate && isModelOutOfStock(activeTemplate, m.name)
-                      ? `${m.name} (Out of stock)`
-                      : m.name,
-                  }))}
-                  disabled={!brandId}
-                  testId="detail-model-select"
-                />
-              </div>
-            </div>
-
-            {/* Select case material */}
-            <div className="pt-1 space-y-2" data-testid="material-select">
-              <div className="flex items-center justify-between">
-                <label className="text-xs text-white/50 block font-medium">Select case material</label>
-                {selectedProduct && (
-                  <span className="text-xs font-mono text-brand">
-                    {selectedProduct.name}
-                  </span>
-                )}
-              </div>
-
-              {loadingProducts ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="h-14 rounded-xl bg-white/5 animate-pulse" />
-                  ))}
+            {brands.length > 0 && (
+              <div className="space-y-3" data-testid="compatible-models-section">
+                <h3 className="font-medium text-sm">Compatible models</h3>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-white/50 mb-1.5 block">Brand</label>
+                    <FilterSelect
+                      value={brandId}
+                      onChange={handleBrandChange}
+                      placeholder="Select brand"
+                      options={brands.map((b) => ({ value: b.id, label: b.name }))}
+                      testId="detail-brand-select"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-white/50 mb-1.5 block">Model</label>
+                    <FilterSelect
+                      value={modelId}
+                      onChange={handleModelChange}
+                      placeholder={brandId ? "Select model" : "Select brand first"}
+                      options={models.map((m) => ({
+                        value: m.id,
+                        label: activeTemplate && isModelOutOfStock(activeTemplate, m.name)
+                          ? `${m.name} (Out of stock)`
+                          : m.name,
+                      }))}
+                      disabled={!brandId}
+                      testId="detail-model-select"
+                    />
+                  </div>
                 </div>
-              ) : products.length > 0 ? (
-                <div
-                  role="radiogroup"
-                  aria-label="Select case material"
-                  className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5"
-                >
-                  {products.map((p) => {
-                    const isSelected = selectedProduct?.id === p.id;
-                    const matPrice = getMaterialPrice(p);
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={isSelected}
-                        tabIndex={0}
-                        data-testid={`material-option-${p.slug}`}
-                        onClick={() => handleCaseProductSelect(p)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            handleCaseProductSelect(p);
-                          }
-                        }}
-                        className={`group relative text-left p-2.5 sm:p-3 rounded-xl border transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand flex flex-col justify-between gap-1.5 ${
-                          isSelected
-                            ? "bg-brand/15 border-brand ring-1 ring-brand text-white shadow-[0_0_12px_rgba(109,177,97,0.18)]"
-                            : "bg-white/[0.03] border-white/10 hover:border-white/20 hover:bg-white/[0.06] text-white/80"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-1 w-full">
-                          <span
-                            className={`text-xs sm:text-sm font-medium leading-tight line-clamp-1 ${
-                              isSelected ? "text-white" : "text-white/90"
-                            }`}
-                            title={p.name}
-                          >
-                            {p.name}
-                          </span>
-                          <span
-                            className={`w-3.5 h-3.5 rounded-full border shrink-0 mt-0.5 flex items-center justify-center transition-colors ${
-                              isSelected
-                                ? "border-brand bg-brand"
-                                : "border-white/30 group-hover:border-white/50"
-                            }`}
-                          >
-                            {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
-                          </span>
-                        </div>
-                        <div className="flex items-baseline justify-between w-full mt-0.5">
-                          <span
-                            className={`font-mono text-xs font-semibold ${
-                              isSelected ? "text-brand" : "text-brand/90"
-                            }`}
-                          >
-                            {formatPrice(matPrice)}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-xs text-white/40 italic py-1">
-                  {modelId
-                    ? "No case materials available for this model"
-                    : "Select a model first to choose material"}
-                </p>
-              )}
-            </div>
+              </div>
+            )}
 
             {brandId && modelId && (
               <p className="text-xs text-white/50" data-testid="device-selection-summary">
@@ -660,7 +758,17 @@ export default function TemplateDetail() {
                 <span className="text-white/80">
                   {brands.find((b) => b.id === brandId)?.name || "—"} ·{" "}
                   {models.find((m) => m.id === modelId)?.name || "—"}
-                  {selectedProduct ? ` · ${selectedProduct.name}` : ""}
+                  {selectedMaterialLabel ? ` · ${selectedMaterialLabel}` : ""}
+                </span>
+              </p>
+            )}
+            {noCompatibleMaterial && (
+              <p className="text-xs text-amber-200/90" data-testid="variant-unavailable">
+                <span className="inline-flex items-center rounded-md bg-amber-500/15 px-2 py-0.5 font-medium text-amber-300">
+                  Unavailable
+                </span>
+                <span className="ml-2">
+                  No compatible case materials are available for {selectedModel?.name || "this model"}. Please select another phone model.
                 </span>
               </p>
             )}
@@ -686,11 +794,11 @@ export default function TemplateDetail() {
                 e.preventDefault();
                 handleAddToCart();
               }}
-              disabled={buying || !modelId || (products.length > 0 && !selectedProduct) || selectedOutOfStock || template.stock <= 0}
+              disabled={!canBuy}
               className="btn-secondary disabled:opacity-50"
             >
               <ShoppingBag aria-hidden />
-              {selectedOutOfStock ? "Out of stock" : "Add to Cart"}
+              {selectedOutOfStock || (selectedVariant?.stock != null && Number(selectedVariant.stock) <= 0) ? "Out of stock" : "Add to Cart"}
             </button>
             <button
               type="button"
@@ -699,11 +807,11 @@ export default function TemplateDetail() {
                 e.preventDefault();
                 handlePurchase();
               }}
-              disabled={buying || !modelId || (products.length > 0 && !selectedProduct) || selectedOutOfStock || template.stock <= 0}
+              disabled={!canBuy}
               className="btn-primary disabled:opacity-50"
             >
               <Zap className="w-4 h-4" />
-              {buying ? "Preparing..." : (selectedOutOfStock || template.stock <= 0) ? "Unavailable" : "Buy Now"}
+              {buying ? "Preparing..." : !canBuy ? "Unavailable" : "Buy Now"}
             </button>
           </div>
         </div>

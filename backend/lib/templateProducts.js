@@ -18,10 +18,14 @@ const CASE_TYPES = ["silicone", "matte", "transparent", "glass"];
 const CASE_TYPE_ALIASES = {
   silicone: ["silicone", "silicone-case"],
   "silicone-case": ["silicone", "silicone-case"],
-  matte: ["matte", "matte-case"],
-  "matte-case": ["matte", "matte-case"],
+  matte: ["matte", "matte-case", "test-case-type"],
+  "matte-case": ["matte", "matte-case", "test-case-type"],
+  "test-case-type": ["matte", "matte-case", "test-case-type"],
   transparent: ["transparent", "transparent-case"],
   "transparent-case": ["transparent", "transparent-case"],
+  glass: ["glass", "glass-case"],
+  "glass-case": ["glass", "glass-case"],
+  "oil-green": ["oil-green"],
 };
 
 const COLLECTIONS = [
@@ -302,14 +306,47 @@ function parseFormFields(body, options = {}) {
   const inventory = inventoryFields(body);
   if (inventory.error) return { error: inventory.error };
 
+  const phone_brand = String(body.phone_brand || "").trim();
+  let resolvedBrand = phone_brand;
+  const allowedBrands = options.allowedBrands;
+  if (Array.isArray(allowedBrands) && allowedBrands.length > 0) {
+    if (!phone_brand) {
+      return { error: "Phone brand is required" };
+    }
+    const matchedBrand = allowedBrands.find(
+      (b) => b.name?.toLowerCase() === phone_brand.toLowerCase() || b.id === phone_brand
+    );
+    if (!matchedBrand) {
+      return { error: `Brand "${phone_brand}" is not in the catalog` };
+    }
+    resolvedBrand = matchedBrand.name;
+  }
+
+  const phone_models = parsePhoneModels(body.phone_models);
+  const allowedModels = options.allowedModels;
+  if (Array.isArray(allowedModels) && phone_models.length > 0) {
+    const validModelNames = new Set(
+      allowedModels.map((m) => String(m.name || m).trim().toLowerCase())
+    );
+    const validModelIds = new Set(
+      allowedModels.map((m) => String(m.id || "").trim()).filter(Boolean)
+    );
+    for (const model of phone_models) {
+      const lower = model.toLowerCase();
+      if (!validModelNames.has(lower) && !validModelIds.has(model)) {
+        return { error: `Model "${model}" is not a valid model for ${resolvedBrand || "this brand"}` };
+      }
+    }
+  }
+
   return {
     title,
     slug: body.slug ? slugify(body.slug) : slugify(title),
     product_type,
     description: String(body.description || "").trim(),
     short_description: String(body.short_description || "").trim().slice(0, 300),
-    phone_brand: String(body.phone_brand || "").trim(),
-    phone_models: parsePhoneModels(body.phone_models),
+    phone_brand: resolvedBrand,
+    phone_models,
     category: category || "Minimal",
     collection: String(body.collection || "").trim() || "Essentials",
     case_type,
@@ -538,6 +575,69 @@ function toPublicProduct(doc) {
   return product;
 }
 
+function humanizeCaseType(slug) {
+  const key = String(slug || "").trim().replace(/-case$/i, "").replace(/-/g, " ");
+  if (!key) return "";
+  const titled = key.replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return /case$/i.test(titled) ? titled : `${titled} Case`;
+}
+
+function getUpdatedTemplateTitle(template, selectedVariant, selectedProduct) {
+  if (!template) return "";
+  const baseTitle = displayTemplateTitle(template.title);
+
+  if (selectedVariant && selectedVariant.id !== template.id && selectedVariant.title) {
+    const variantTitle = displayTemplateTitle(selectedVariant.title);
+    if (variantTitle && variantTitle !== baseTitle) {
+      return variantTitle;
+    }
+  }
+
+  const newMaterialName = selectedProduct?.name
+    || selectedVariant?.case_type_label
+    || (selectedVariant?.case_type ? humanizeCaseType(selectedVariant.case_type) : "");
+
+  if (!newMaterialName) return baseTitle;
+
+  const baseCaseType = String(template.case_type || "").trim();
+  const baseCaseLabel = humanizeCaseType(baseCaseType);
+  const baseMaterial = String(template.material || "").trim();
+
+  const candidates = [
+    baseCaseLabel ? `${baseCaseLabel} Case` : null,
+    baseCaseLabel,
+    baseCaseType ? `${baseCaseType} case` : null,
+    baseCaseType ? `${baseCaseType.replace(/-case$/i, "")} case` : null,
+    baseMaterial && baseMaterial.toLowerCase() !== "case" ? `${baseMaterial} Case` : null,
+    baseCaseType ? baseCaseType.replace(/-case$/i, "") : null,
+    baseMaterial,
+  ].filter(Boolean);
+
+  const uniqueCandidates = [];
+  for (const c of candidates) {
+    const trimmed = String(c).trim();
+    if (trimmed && !uniqueCandidates.some((u) => u.toLowerCase() === trimmed.toLowerCase())) {
+      uniqueCandidates.push(trimmed);
+    }
+  }
+
+  uniqueCandidates.sort((a, b) => b.length - a.length);
+
+  for (const candidate of uniqueCandidates) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    if (regex.test(baseTitle)) {
+      let replacement = newMaterialName;
+      if (!/case$/i.test(candidate) && /case$/i.test(newMaterialName)) {
+        replacement = newMaterialName.replace(/\s+Case$/i, "");
+      }
+      return baseTitle.replace(regex, replacement).replace(/\s{2,}/g, " ").trim();
+    }
+  }
+
+  return baseTitle;
+}
+
 module.exports = {
   CATEGORIES,
   CASE_TYPES,
@@ -561,6 +661,7 @@ module.exports = {
   trashedClause,
   publishedShopClause,
   displayTemplateTitle,
+  getUpdatedTemplateTitle,
   stripCopyTitleSuffix,
   stripCopySlugSuffix,
   toRelativeMediaUrl,
