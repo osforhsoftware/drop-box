@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useNavigate, Navigate } from "react-router-dom";
+import { useNavigate, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { buildAuthSecurityPayload, honeypotFieldProps, HONEYPOT_CLASS } from "../../lib/authSecurity";
 import SiteLogo from "../../components/SiteLogo";
@@ -7,6 +7,7 @@ import SiteLogo from "../../components/SiteLogo";
 export default function AdminLogin() {
   const { user, login, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const formLoadedAt = useRef(Date.now());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,7 +15,11 @@ export default function AdminLogin() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (user?.role === "admin") return <Navigate to="/admin" replace />;
+  const nextPath = location.state?.from?.pathname
+    ? `${location.state.from.pathname}${location.state.from.search || ""}`
+    : "/admin";
+
+  if (user?.role === "admin") return <Navigate to={nextPath} replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -31,7 +36,7 @@ export default function AdminLogin() {
         setErr("Admin accounts must sign in here. Customers use Google on the shop login page.");
         return;
       }
-      navigate("/admin");
+      navigate(nextPath, { replace: true });
     } catch (e) {
       setErr(e.response?.data?.detail || "Login failed");
     } finally {

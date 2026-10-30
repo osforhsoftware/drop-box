@@ -13,10 +13,11 @@ import {
   TEMPLATE_THUMB_SPEC,
   TEMPLATE_TAG_SUGGESTIONS,
   syncVariantRows,
+  getDesignCompatibility,
 } from "../../constants/templateProducts";
 import {
   Plus, Trash2, Pencil, Copy, Star, Eye, EyeOff, Globe, Search, X, Check, RotateCcw,
-  Package, Smartphone, Layers, DollarSign, Image,
+  Package, Smartphone, Layers, DollarSign, Image, Settings, ChevronDown, ChevronUp, MoreVertical, Filter, SlidersHorizontal,
 } from "lucide-react";
 import TemplateQuickView from "../../components/TemplateQuickView";
 import TagSelect from "../../components/TagSelect";
@@ -33,6 +34,7 @@ const EMPTY = {
   product_type: "customized",
   phone_brand: "Apple",
   phone_models: [],
+  compatibility: [],
   category: "Minimal",
   collection: "Essentials",
   case_type: "",
@@ -101,13 +103,144 @@ export default function AdminTemplateProducts() {
   const [caseTypes, setCaseTypes] = useState([]);
   const [brands, setBrands] = useState([]);
   const [brandModels, setBrandModels] = useState([]);
+  const [activeBrandName, setActiveBrandName] = useState("Apple");
   const [loadingModels, setLoadingModels] = useState(false);
+  const [showAddBrandModal, setShowAddBrandModal] = useState(false);
+  const [brandSearchQuery, setBrandSearchQuery] = useState("");
+  const [newBrandInput, setNewBrandInput] = useState("");
+  const [creatingBrand, setCreatingBrand] = useState(false);
   const [pendingMaterials, setPendingMaterials] = useState([]);
   const [materialSiblings, setMaterialSiblings] = useState([]);
   const [materialForm, setMaterialForm] = useState(EMPTY_MATERIAL);
   const [linkProductId, setLinkProductId] = useState("");
   const [linkTargets, setLinkTargets] = useState([]);
   const [materialSaving, setMaterialSaving] = useState(false);
+  const [editingVariantId, setEditingVariantId] = useState(null);
+  const [stagedDefaultCaseType, setStagedDefaultCaseType] = useState("");
+  const [expandedStockIds, setExpandedStockIds] = useState(new Set());
+  const [openActionMenuId, setOpenActionMenuId] = useState(null);
+
+  const toggleStockExpand = (id) => {
+    setExpandedStockIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      setOpenActionMenuId(null);
+    };
+    if (openActionMenuId) {
+      window.addEventListener("click", handleGlobalClick);
+      return () => window.removeEventListener("click", handleGlobalClick);
+    }
+  }, [openActionMenuId]);
+
+  const updateSibling = (variantId, field, value) => {
+    setMaterialSiblings((prev) =>
+      prev.map((s) => {
+        if (s.id !== variantId) return s;
+        const updated = { ...s, [field]: value };
+        if (field === "variant_inventory" && Array.isArray(value)) {
+          updated.stock = String(value.reduce((acc, r) => acc + (r.is_out_of_stock ? 0 : Math.max(0, Number(r.stock_quantity) || 0)), 0));
+        }
+        return updated;
+      })
+    );
+    if (editing && variantId === editing.id) {
+      setForm((prev) => {
+        const next = { ...prev };
+        if (field === "price") next.price = String(value);
+        else if (field === "sale_price") next.sale_price = value == null ? "" : String(value);
+        else if (field === "stock") next.stock = String(value);
+        else if (field === "sku") next.sku = String(value || "");
+        else if (field === "material") next.material = String(value || "");
+        else if (field === "description") next.description = String(value || "");
+        else if (field === "compatibility") {
+          next.compatibility = value;
+          next.phone_models = [...new Set((value || []).flatMap((g) => g.models || []))];
+        } else if (field === "phone_models") {
+          next.phone_models = value;
+        } else if (field === "variant_inventory") {
+          next.variant_inventory = value;
+          next.stock = String(value.reduce((acc, r) => acc + (r.is_out_of_stock ? 0 : Math.max(0, Number(r.stock_quantity) || 0)), 0));
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleSetDefaultVariant = async (variant) => {
+    if (!editing) return;
+    if (variant.status !== "published") {
+      toast.error("Cannot set a disabled or draft material as default. Please enable it first.");
+      return;
+    }
+    if (variant.stock != null && Number(variant.stock) <= 0) {
+      toast.error("Cannot set an out-of-stock material as default.");
+      return;
+    }
+
+    setMaterialSaving(true);
+    try {
+      await api.post(`/admin/template-products/${editing.id}/default-variant/${variant.id}`);
+      const cName = caseTypes.find((c) => c.slug === variant.case_type)?.name || variant.case_type;
+      toast.success(`${cName} set as default storefront material`);
+      await loadMaterialGroup(editing);
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not set default material");
+    } finally {
+      setMaterialSaving(false);
+    }
+  };
+
+  const saveSingleVariant = async (variant) => {
+    if (!editing) return;
+    const isCurrent = variant.id === editing.id;
+    const p = Number(variant.price);
+    if (!Number.isFinite(p) || p <= 0) {
+      toast.error("Valid price greater than 0 is required");
+      return;
+    }
+    setMaterialSaving(true);
+    try {
+      const cleanInventory = Array.isArray(variant.variant_inventory) ? variant.variant_inventory.map((row) => ({
+        variant_id: row.variant_id,
+        model_name: row.model_name,
+        brand: row.brand || null,
+        stock_quantity: Math.max(0, Math.floor(Number(row.stock_quantity) || 0)),
+        is_out_of_stock: row.is_out_of_stock === true || Number(row.stock_quantity) <= 0,
+        price: row.price != null && row.price !== "" ? Number(row.price) : null,
+        sale_price: row.sale_price != null && row.sale_price !== "" ? Number(row.sale_price) : null,
+      })) : undefined;
+
+      await api.patch(`/admin/template-products/${editing.id}/material-variants/${variant.id}`, {
+        price: p,
+        sale_price: variant.sale_price === "" || variant.sale_price == null ? null : Number(variant.sale_price),
+        stock: Math.max(0, parseInt(variant.stock, 10) || 0),
+        sku: variant.sku || null,
+        material: variant.material || "",
+        description: variant.description || "",
+        status: variant.status || "published",
+        phone_models: Array.isArray(variant.phone_models) ? variant.phone_models : undefined,
+        compatibility: Array.isArray(variant.compatibility) ? variant.compatibility : undefined,
+        variant_inventory: cleanInventory,
+      });
+      const cName = caseTypes.find((c) => c.slug === variant.case_type)?.name || variant.case_type;
+      toast.success(isCurrent ? `Primary material (${cName}) saved` : `Variant ${cName} saved`);
+      setEditingVariantId(null);
+      await loadMaterialGroup(editing);
+      load(data.page);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not save variant");
+    } finally {
+      setMaterialSaving(false);
+    }
+  };
   const [showBrandModelManager, setShowBrandModelManager] = useState(false);
   const thumbRef = useRef(null);
   const galleryRef = useRef(null);
@@ -173,14 +306,113 @@ export default function AdminTemplateProducts() {
     }
   }, [brands]);
 
-  const handleBrandChange = async (nextBrandName) => {
-    setForm((prev) => ({
-      ...prev,
-      phone_brand: nextBrandName,
-      phone_models: [],
-      variant_inventory: [],
-    }));
+  const handleBrandSelect = async (nextBrandName) => {
+    if (!nextBrandName) return;
+    if (nextBrandName === "__add_new_brand__") {
+      setBrandSearchQuery("");
+      setNewBrandInput("");
+      setShowAddBrandModal(true);
+      return;
+    }
+    setActiveBrandName(nextBrandName);
+    setForm((prev) => {
+      const currentCompat = prev.compatibility || [];
+      const exists = currentCompat.some(
+        (g) => g.brand.toLowerCase() === nextBrandName.toLowerCase()
+      );
+      const nextCompat = exists
+        ? currentCompat
+        : [...currentCompat, { brand: nextBrandName, models: [] }];
+      return {
+        ...prev,
+        phone_brand: nextBrandName,
+        compatibility: nextCompat,
+      };
+    });
     await loadBrandModelsForBrand(nextBrandName);
+  };
+
+  const handleAddNewBrand = async (rawName) => {
+    const trimmed = String(rawName || "").trim();
+    if (!trimmed) {
+      toast.error("Please enter a brand name");
+      return null;
+    }
+    const existingInCatalog = brands.find(
+      (b) => b.name?.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existingInCatalog) {
+      await handleBrandSelect(existingInCatalog.name);
+      setShowAddBrandModal(false);
+      setNewBrandInput("");
+      toast.info(`Selected existing brand "${existingInCatalog.name}"`);
+      return existingInCatalog;
+    }
+    setCreatingBrand(true);
+    try {
+      const res = await api.post("/brands", { name: trimmed });
+      const createdBrand = res.data;
+      const nextBrands = [...brands, createdBrand].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "")
+      );
+      setBrands(nextBrands);
+      await handleBrandSelect(createdBrand.name);
+      setShowAddBrandModal(false);
+      setNewBrandInput("");
+      toast.success(`Brand "${createdBrand.name}" created and added`);
+      return createdBrand;
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to create brand in catalog");
+      return null;
+    } finally {
+      setCreatingBrand(false);
+    }
+  };
+
+  const handleRemoveBrand = (brandToRemove) => {
+    setForm((prev) => {
+      const nextCompat = (prev.compatibility || []).filter(
+        (g) => g.brand.toLowerCase() !== brandToRemove.toLowerCase()
+      );
+      const allModels = [...new Set(nextCompat.flatMap((g) => g.models))];
+      let nextActive = activeBrandName;
+      if (activeBrandName.toLowerCase() === brandToRemove.toLowerCase()) {
+        nextActive = nextCompat[0]?.brand || brands[0]?.name || "Apple";
+        loadBrandModelsForBrand(nextActive);
+        setActiveBrandName(nextActive);
+      }
+      return {
+        ...prev,
+        compatibility: nextCompat,
+        phone_brand: nextCompat[0]?.brand || nextActive,
+        phone_models: allModels,
+        variant_inventory: syncVariantRows(allModels, prev.variant_inventory, prev.stock),
+      };
+    });
+  };
+
+  const handleActiveBrandModelsChange = (updatedModels) => {
+    setForm((prev) => {
+      const currentCompat = prev.compatibility || [];
+      const exists = currentCompat.some(
+        (g) => g.brand.toLowerCase() === activeBrandName.toLowerCase()
+      );
+      const nextCompat = exists
+        ? currentCompat.map((g) =>
+            g.brand.toLowerCase() === activeBrandName.toLowerCase()
+              ? { ...g, models: updatedModels }
+              : g
+          )
+        : [...currentCompat, { brand: activeBrandName, models: updatedModels }];
+
+      const allModels = [...new Set(nextCompat.flatMap((g) => g.models))];
+      return {
+        ...prev,
+        compatibility: nextCompat,
+        phone_models: allModels,
+        variant_inventory: syncVariantRows(allModels, prev.variant_inventory, prev.stock),
+      };
+    });
   };
 
   const handleModelAdded = (newModel) => {
@@ -199,7 +431,7 @@ export default function AdminTemplateProducts() {
       const bList = Array.isArray(bRes.data) ? bRes.data : [];
       setBrands(bList);
 
-      const targetBrand = affectedBrandName || form.phone_brand;
+      const targetBrand = affectedBrandName || activeBrandName || form.phone_brand;
       if (targetBrand) {
         await loadBrandModelsForBrand(targetBrand, bList);
       }
@@ -211,9 +443,11 @@ export default function AdminTemplateProducts() {
   const openCreate = async () => {
     const defaultBrand = brands[0]?.name || "Apple";
     setEditing(null);
+    setActiveBrandName(defaultBrand);
     setForm({
       ...EMPTY,
       phone_brand: defaultBrand,
+      compatibility: [{ brand: defaultBrand, models: [] }],
       case_type: caseTypes[0]?.slug || "",
       phone_models: [],
       variant_inventory: [],
@@ -225,6 +459,8 @@ export default function AdminTemplateProducts() {
     setRemoveImages([]);
     setMaterialSiblings([]);
     setPendingMaterials([]);
+    setStagedDefaultCaseType("");
+    setEditingVariantId(null);
     setMaterialForm(EMPTY_MATERIAL);
     setLinkProductId("");
     setLinkTargets([]);
@@ -235,14 +471,25 @@ export default function AdminTemplateProducts() {
   const openEdit = async (item) => {
     setEditing(item);
     setPendingMaterials([]);
-    const itemBrand = item.phone_brand || brands[0]?.name || "Apple";
-    const modelsForBrand = await loadBrandModelsForBrand(itemBrand);
-    const validModelNames = new Set((modelsForBrand || []).map((m) => m.name.toLowerCase()));
+    setStagedDefaultCaseType("");
+    setEditingVariantId(null);
 
-    const existingModels = item.phone_models || [];
-    const reconciledModels = modelsForBrand.length > 0
-      ? existingModels.filter((m) => validModelNames.has(String(m).trim().toLowerCase()))
-      : existingModels;
+    let initialCompat = [];
+    if (Array.isArray(item.compatibility) && item.compatibility.length > 0) {
+      initialCompat = item.compatibility.map((g) => ({
+        brand: g.brand,
+        models: Array.isArray(g.models) ? [...g.models] : [],
+      }));
+    } else {
+      const itemBrand = item.phone_brand || brands[0]?.name || "Apple";
+      const existingModels = Array.isArray(item.phone_models) ? [...item.phone_models] : [];
+      initialCompat = [{ brand: itemBrand, models: existingModels }];
+    }
+
+    const currentBrand = initialCompat[0]?.brand || item.phone_brand || brands[0]?.name || "Apple";
+    setActiveBrandName(currentBrand);
+
+    const allModels = [...new Set(initialCompat.flatMap((g) => g.models))];
 
     setForm({
       title: displayTemplateTitle(item.title),
@@ -250,8 +497,9 @@ export default function AdminTemplateProducts() {
       description: item.description || "",
       short_description: item.short_description || "",
       product_type: normalizeProductType(item.product_type),
-      phone_brand: itemBrand,
-      phone_models: reconciledModels,
+      phone_brand: currentBrand,
+      compatibility: initialCompat,
+      phone_models: allModels,
       category: item.category || "Minimal",
       collection: item.collection || "Essentials",
       case_type: item.case_type || caseTypes[0]?.slug || "",
@@ -259,11 +507,22 @@ export default function AdminTemplateProducts() {
       price: String(item.price),
       sale_price: item.sale_price != null ? String(item.sale_price) : "",
       stock: String(item.stock ?? 0),
-      variant_inventory: syncVariantRows(
-        reconciledModels,
-        item.variants?.length ? item.variants : item.variant_inventory,
-        item.stock ?? 0
-      ),
+      variant_inventory: (() => {
+        const brandMap = {};
+        (initialCompat || []).forEach((g) => {
+          (g.models || []).forEach((m) => {
+            brandMap[m] = g.brand;
+          });
+        });
+        return syncVariantRows(
+          allModels,
+          item.variants?.length ? item.variants : item.variant_inventory,
+          item.stock ?? 0,
+          item.price ?? "",
+          item.sale_price ?? "",
+          brandMap
+        );
+      })(),
       sku: item.sku || "",
       tags: [...(item.tags || [])],
       featured: item.featured,
@@ -284,6 +543,7 @@ export default function AdminTemplateProducts() {
     setMaterialForm(EMPTY_MATERIAL);
     setLinkProductId("");
     setShowForm(true);
+    await loadBrandModelsForBrand(currentBrand);
     loadMaterialGroup(item);
   };
 
@@ -293,8 +553,64 @@ export default function AdminTemplateProducts() {
         api.get(`/admin/template-products/${item.id}/material-variants`),
         api.get("/admin/template-products", { params: { page: 1, limit: 100, status: "all" } }),
       ]);
-      const siblings = groupRes.data.items || [item];
+      const rawSiblings = groupRes.data.items || [item];
+      const brandMap = {};
+      (item.compatibility || []).forEach((g) => {
+        (g.models || []).forEach((m) => {
+          brandMap[m] = g.brand;
+        });
+      });
+      const siblings = rawSiblings.map((s) => {
+        const sModels = Array.isArray(s.phone_models) && s.phone_models.length > 0
+          ? s.phone_models
+          : (Array.isArray(item.phone_models) ? item.phone_models : []);
+        const sBrandMap = { ...brandMap };
+        (s.compatibility || []).forEach((g) => {
+          (g.models || []).forEach((m) => {
+            sBrandMap[m] = g.brand;
+          });
+        });
+        const inv = syncVariantRows(
+          sModels,
+          s.variants?.length ? s.variants : s.variant_inventory,
+          s.stock ?? 0,
+          s.price ?? "",
+          s.sale_price ?? "",
+          sBrandMap
+        );
+        return {
+          ...s,
+          variant_inventory: inv,
+        };
+      });
       setMaterialSiblings(siblings);
+
+      const designCompat = getDesignCompatibility({ ...item, material_variants: siblings });
+      if (designCompat.length > 0) {
+        setForm((prev) => {
+          const currentCompat = prev.compatibility || [];
+          const merged = [...currentCompat];
+          for (const group of designCompat) {
+            const existingG = merged.find((g) => g.brand.toLowerCase() === group.brand.toLowerCase());
+            if (!existingG) {
+              merged.push({ brand: group.brand, models: [...group.models] });
+            } else {
+              for (const m of group.models) {
+                if (!existingG.models.includes(m)) {
+                  existingG.models.push(m);
+                }
+              }
+            }
+          }
+          const allModels = [...new Set(merged.flatMap((g) => g.models))];
+          return {
+            ...prev,
+            compatibility: merged,
+            phone_models: allModels,
+          };
+        });
+      }
+
       const groupedIds = new Set(siblings.map((row) => row.id));
       setLinkTargets(
         (listRes.data.items || []).filter((row) => (
@@ -312,6 +628,8 @@ export default function AdminTemplateProducts() {
     setEditing(null);
     setMaterialSiblings([]);
     setPendingMaterials([]);
+    setStagedDefaultCaseType("");
+    setEditingVariantId(null);
     setMaterialForm(EMPTY_MATERIAL);
     setLinkProductId("");
     setLinkTargets([]);
@@ -391,26 +709,71 @@ export default function AdminTemplateProducts() {
 
   const buildFormData = () => {
     const fd = new FormData();
-    const skip = new Set(["phone_models", "tags", "variant_inventory"]);
+    const skip = new Set(["phone_models", "tags", "variant_inventory", "compatibility"]);
     Object.entries(form).forEach(([k, v]) => {
       if (skip.has(k)) return;
       if (typeof v === "boolean") fd.append(k, String(v));
       else if (Array.isArray(v)) return;
       else fd.append(k, v ?? "");
     });
+    const groupsWithModels = (form.compatibility || []).filter((g) => g.models && g.models.length > 0);
+    const finalCompat = groupsWithModels.length > 0 ? groupsWithModels : form.compatibility;
+    fd.append("compatibility", JSON.stringify(finalCompat));
+    fd.append("phone_brand", finalCompat[0]?.brand || form.phone_brand || "");
     fd.append("phone_models", JSON.stringify(form.phone_models));
     fd.append("tags", JSON.stringify(form.tags));
     fd.append("variant_inventory", JSON.stringify(
       (form.variant_inventory || []).map((row) => ({
         variant_id: row.variant_id,
         model_name: row.model_name,
+        brand: row.brand || null,
         stock_quantity: Math.max(0, Math.floor(Number(row.stock_quantity) || 0)),
         is_out_of_stock: row.is_out_of_stock === true || Number(row.stock_quantity) <= 0,
+        price: row.price != null && row.price !== "" ? Number(row.price) : null,
+        sale_price: row.sale_price != null && row.sale_price !== "" ? Number(row.sale_price) : null,
       }))
     ));
     if (thumbnail) fd.append("thumbnail", thumbnail);
     gallery.forEach((f) => fd.append("gallery", f));
     if (removeImages.length) fd.append("remove_images", JSON.stringify(removeImages));
+
+    if (!editing) {
+      const isPrimaryDefault = !stagedDefaultCaseType || stagedDefaultCaseType === form.case_type;
+      fd.append("is_default", String(isPrimaryDefault));
+    }
+
+    if (editing) {
+      const otherVariants = materialSiblings
+        .filter((s) => s.id !== editing.id && caseTypeKey(s.case_type) !== caseTypeKey(form.case_type))
+        .map((v) => ({
+          id: v.id || null,
+          case_type: v.case_type,
+          material: v.material || "",
+          case_type_label: v.case_type_label || null,
+          price: Number(v.price) || 0,
+          sale_price: v.sale_price === "" || v.sale_price == null ? null : Number(v.sale_price),
+          stock: Math.max(0, parseInt(v.stock, 10) || 0),
+          sku: v.sku || null,
+          description: v.description || "",
+          status: v.status || "published",
+          is_default: Boolean(v.is_default),
+          phone_models: Array.isArray(v.phone_models) ? v.phone_models : [],
+          compatibility: Array.isArray(v.compatibility) ? v.compatibility : [],
+          variant_inventory: Array.isArray(v.variant_inventory) ? v.variant_inventory.map((row) => ({
+            variant_id: row.variant_id,
+            model_name: row.model_name,
+            brand: row.brand || null,
+            stock_quantity: Math.max(0, Math.floor(Number(row.stock_quantity) || 0)),
+            is_out_of_stock: row.is_out_of_stock === true || Number(row.stock_quantity) <= 0,
+            price: row.price != null && row.price !== "" ? Number(row.price) : null,
+            sale_price: row.sale_price != null && row.sale_price !== "" ? Number(row.sale_price) : null,
+          })) : undefined,
+          thumbnail: v.thumbnail || null,
+          images: Array.isArray(v.images) ? v.images : [],
+        }));
+      fd.append("material_variants", JSON.stringify(otherVariants));
+    }
+
     return fd;
   };
 
@@ -420,15 +783,19 @@ export default function AdminTemplateProducts() {
       toast.error("Thumbnail image is required");
       return;
     }
-    if (!form.phone_models || form.phone_models.length === 0) {
+    const totalModels = (form.compatibility || []).reduce((sum, g) => sum + (g.models?.length || 0), 0);
+    if (totalModels === 0 && (!form.phone_models || form.phone_models.length === 0)) {
       toast.error("Please select at least one supported phone model");
       return;
     }
+    const activeGroup = (form.compatibility || []).find(
+      (g) => g.brand.toLowerCase() === activeBrandName.toLowerCase()
+    );
     const validModelNames = new Set(brandModels.map((m) => m.name.toLowerCase()));
-    if (brandModels.length > 0) {
-      const invalid = form.phone_models.filter((m) => !validModelNames.has(String(m).trim().toLowerCase()));
+    if (brandModels.length > 0 && activeGroup?.models?.length > 0) {
+      const invalid = activeGroup.models.filter((m) => !validModelNames.has(String(m).trim().toLowerCase()));
       if (invalid.length > 0) {
-        toast.error(`The following models are not valid for ${form.phone_brand}: ${invalid.join(", ")}`);
+        toast.error(`The following models are not valid for ${activeBrandName}: ${invalid.join(", ")}`);
         return;
       }
     }
@@ -436,8 +803,38 @@ export default function AdminTemplateProducts() {
     try {
       const fd = buildFormData();
       if (editing) {
-        await api.put(`/admin/template-products/${editing.id}`, fd);
-        toast.success("Phone case updated");
+        if (
+          materialForm.case_type &&
+          materialForm.price &&
+          caseTypeKey(materialForm.case_type) !== caseTypeKey(form.case_type)
+        ) {
+          const currentRaw = fd.get("material_variants");
+          const currentList = currentRaw ? JSON.parse(currentRaw) : [];
+          if (!currentList.some((m) => caseTypeKey(m.case_type) === caseTypeKey(materialForm.case_type))) {
+            currentList.push({
+              case_type: materialForm.case_type,
+              material: materialForm.material,
+              price: Number(materialForm.price),
+              sale_price: materialForm.sale_price ? Number(materialForm.sale_price) : null,
+              stock: Math.max(0, parseInt(materialForm.stock, 10) || 0),
+              sku: materialForm.sku || null,
+              description: materialForm.description,
+              status: materialForm.status || "published",
+              phone_models: materialForm.inherit_models !== false ? [] : (materialForm.phone_models || []),
+            });
+            fd.set("material_variants", JSON.stringify(currentList));
+          }
+        }
+
+        const res = await api.put(`/admin/template-products/${editing.id}`, fd);
+        toast.success("Phone case and material variants updated");
+        setMaterialForm(EMPTY_MATERIAL);
+        if (res.data?.material_variants) {
+          setMaterialSiblings(res.data.material_variants);
+        }
+        await loadMaterialGroup(res.data || editing);
+        load(data.page);
+        closeForm();
       } else {
         // Auto-stage in-progress material variant if filled
         let stagedList = [...pendingMaterials];
@@ -473,7 +870,10 @@ export default function AdminTemplateProducts() {
                 sku: mat.sku,
                 stock: mat.stock,
                 status: mat.status || "published",
+                is_default: mat.case_type === stagedDefaultCaseType,
                 phone_models: Array.isArray(mat.phone_models) && mat.phone_models.length > 0 ? mat.phone_models : undefined,
+                compatibility: Array.isArray(mat.compatibility) && mat.compatibility.length > 0 ? mat.compatibility : undefined,
+                variant_inventory: Array.isArray(mat.variant_inventory) ? mat.variant_inventory : undefined,
               });
             } catch (err) {
               console.error("Failed to add staged material variant:", err);
@@ -594,6 +994,15 @@ export default function AdminTemplateProducts() {
     setMaterialSaving(true);
     try {
       const modelsToSave = materialForm.inherit_models !== false ? [] : (materialForm.phone_models || []);
+      const compatToSave = materialForm.inherit_models !== false
+        ? []
+        : (materialForm.compatibility && materialForm.compatibility.length > 0
+            ? materialForm.compatibility
+            : (form.compatibility || []).map((g) => ({
+                brand: g.brand,
+                models: (g.models || []).filter((m) => modelsToSave.includes(m)),
+              })).filter((g) => g.models.length > 0));
+
       const res = await api.post(`/admin/template-products/${editing.id}/material-variants`, {
         case_type: materialForm.case_type,
         material: materialForm.material,
@@ -605,6 +1014,7 @@ export default function AdminTemplateProducts() {
         stock: materialForm.stock,
         status: materialForm.status,
         phone_models: modelsToSave.length > 0 ? modelsToSave : undefined,
+        compatibility: compatToSave.length > 0 ? compatToSave : undefined,
       });
       applyMaterialGroup(res.data);
       setMaterialForm(EMPTY_MATERIAL);
@@ -631,11 +1041,21 @@ export default function AdminTemplateProducts() {
       return;
     }
     const modelsToSave = materialForm.inherit_models !== false ? [] : (materialForm.phone_models || []);
+    const compatToSave = materialForm.inherit_models !== false
+      ? []
+      : (materialForm.compatibility && materialForm.compatibility.length > 0
+          ? materialForm.compatibility
+          : (form.compatibility || []).map((g) => ({
+              brand: g.brand,
+              models: (g.models || []).filter((m) => modelsToSave.includes(m)),
+            })).filter((g) => g.models.length > 0));
+
     setPendingMaterials((prev) => [
       ...prev,
       {
         ...materialForm,
         phone_models: modelsToSave,
+        compatibility: compatToSave,
       },
     ]);
     setMaterialForm(EMPTY_MATERIAL);
@@ -862,8 +1282,22 @@ export default function AdminTemplateProducts() {
   };
 
   const selectedBrandObj = brands.find(
-    (b) => b.name?.toLowerCase() === String(form.phone_brand || "").trim().toLowerCase()
+    (b) => b.name?.toLowerCase() === String(activeBrandName || form.phone_brand || "").trim().toLowerCase()
   );
+  const activeGroupModels = (form.compatibility || []).find(
+    (g) => g.brand.toLowerCase() === activeBrandName.toLowerCase()
+  )?.models || [];
+
+  const configuredBrandKeys = new Set(
+    (form.compatibility || []).map((g) => String(g.brand || "").trim().toLowerCase())
+  );
+  const availableCatalogBrands = brands.filter(
+    (b) => !configuredBrandKeys.has(String(b.name || "").trim().toLowerCase())
+  );
+  const filteredCatalogBrands = brands.filter((b) => {
+    if (!brandSearchQuery.trim()) return true;
+    return (b.name || "").toLowerCase().includes(brandSearchQuery.trim().toLowerCase());
+  });
 
   return (
     <div data-testid="admin-template-products">
@@ -885,142 +1319,726 @@ export default function AdminTemplateProducts() {
         </button>
       </div>
 
-      <div className="flex gap-2 mb-4">
+      {/* Tabs */}
+      <div className="flex items-center gap-2 mb-5">
         <button
           type="button"
           onClick={() => { setViewMode("active"); setSelected(new Set()); }}
-          className={`px-4 py-2 rounded-xl text-sm ${viewMode === "active" ? "bg-brand text-white" : "glass-2 text-white/60"}`}
+          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
+            viewMode === "active"
+              ? "bg-brand text-white shadow-lg shadow-brand/20 ring-1 ring-white/20"
+              : "glass-2 text-white/60 hover:text-white hover:bg-white/10"
+          }`}
         >
-          Active phone cases
+          <span>Active phone cases</span>
+          {viewMode === "active" && data.total != null && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-white/20 text-white font-semibold">
+              {data.total}
+            </span>
+          )}
         </button>
         <button
           type="button"
           onClick={() => { setViewMode("trash"); setSelected(new Set()); setStatusFilter("all"); }}
-          className={`px-4 py-2 rounded-xl text-sm flex items-center gap-2 ${viewMode === "trash" ? "bg-red-600 text-white" : "glass-2 text-white/60"}`}
+          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
+            viewMode === "trash"
+              ? "bg-red-600 text-white shadow-lg shadow-red-600/20 ring-1 ring-white/20"
+              : "glass-2 text-white/60 hover:text-white hover:bg-white/10"
+          }`}
           data-testid="trash-view-tab"
         >
-          <Trash2 className="w-4 h-4" /> Trash
+          <Trash2 className="w-4 h-4" />
+          <span>Trash</span>
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-6">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search phone cases…"
-            className="w-full pl-10 pr-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-sm"
-          />
+      {/* Search & Filter Bar */}
+      <div className="glass rounded-xl p-3 mb-5 border border-white/10 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by title, brand, or model…"
+              className="w-full pl-9 pr-8 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm text-white placeholder-white/30 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/40"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white p-0.5"
+                title="Clear search"
+                aria-label="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {!isTrashView && (
+            <>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm text-white focus:outline-none focus:border-brand"
+                aria-label="Filter by status"
+              >
+                <option value="all">All statuses</option>
+                <option value="published">Published</option>
+                <option value="draft">Draft</option>
+              </select>
+
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm text-white focus:outline-none focus:border-brand"
+                data-testid="filter-product-type"
+                aria-label="Filter by phone case type"
+              >
+                <option value="all">All case types</option>
+                {TEMPLATE_PRODUCT_TYPES.map((t) => (
+                  <option key={t.slug} value={t.slug}>{t.label}</option>
+                ))}
+              </select>
+            </>
+          )}
+
+          {(search || (!isTrashView && (statusFilter !== "all" || typeFilter !== "all"))) && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("all");
+                setTypeFilter("all");
+              }}
+              className="text-xs text-white/50 hover:text-white px-2 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 flex items-center gap-1"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset</span>
+            </button>
+          )}
         </div>
-        {!isTrashView && (
-          <>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-sm"
-            >
-              <option value="all">All status</option>
-              <option value="published">Published</option>
-              <option value="draft">Draft</option>
-            </select>
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-sm"
-              data-testid="filter-product-type"
-            >
-              <option value="all">All phone case types</option>
-              {TEMPLATE_PRODUCT_TYPES.map((t) => (
-                <option key={t.slug} value={t.slug}>{t.label}</option>
-              ))}
-            </select>
-          </>
-        )}
-        {selected.size > 0 && (
-          <div className="flex gap-2">
+      </div>
+
+      {/* Bulk selection action bar */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-brand/10 border border-brand/30 mb-5 shadow-lg backdrop-blur">
+          <div className="flex items-center gap-2 text-xs font-medium text-white">
+            <span className="w-2 h-2 rounded-full bg-brand animate-pulse" />
+            <span>{selected.size} phone {selected.size === 1 ? "case" : "cases"} selected</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {isTrashView ? (
               <>
-                <button onClick={() => bulk("restore")} className="btn-secondary text-xs py-2">Restore</button>
-                <button onClick={() => bulk("purge")} className="btn-secondary text-xs py-2 text-red-400">Delete permanently</button>
+                <button
+                  type="button"
+                  onClick={() => bulk("restore")}
+                  className="btn-secondary text-xs py-1.5 px-3 text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Restore</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulk("purge")}
+                  className="btn-secondary text-xs py-1.5 px-3 text-red-400 hover:text-red-300 flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete permanently</span>
+                </button>
               </>
             ) : (
               <>
-                <button onClick={() => bulk("publish")} className="btn-secondary text-xs py-2">Publish</button>
-                <button onClick={() => bulk("unpublish")} className="btn-secondary text-xs py-2">Unpublish</button>
-                <button onClick={() => bulk("feature")} className="btn-secondary text-xs py-2">Feature</button>
-                <button onClick={() => bulk("trash")} className="btn-secondary text-xs py-2 text-red-400">Move to trash</button>
+                <button
+                  type="button"
+                  onClick={() => bulk("publish")}
+                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                >
+                  <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Publish</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulk("unpublish")}
+                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                >
+                  <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Unpublish</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulk("feature")}
+                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                >
+                  <Star className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Feature</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulk("trash")}
+                  className="btn-secondary text-xs py-1.5 px-3 text-red-400 hover:text-red-300 flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Move to trash</span>
+                </button>
               </>
             )}
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="text-xs text-white/50 hover:text-white px-2 py-1 ml-1"
+            >
+              Deselect
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="glass rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+      {/* Main Container: Desktop Table + Mobile Cards */}
+      <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-xl">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm text-left">
             <thead>
-              <tr className="border-b border-white/10 text-left text-white/50">
-                <th className="p-4 w-10">
-                  <input type="checkbox" checked={selected.size === data.items.length && data.items.length > 0} onChange={toggleAll} />
+              <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-white/45 bg-white/[0.02]">
+                <th className="py-3.5 px-4 w-12 text-center">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === data.items.length && data.items.length > 0}
+                    onChange={toggleAll}
+                    aria-label="Select all phone cases"
+                    className="rounded border-white/20 bg-white/5 cursor-pointer accent-[#6DB161]"
+                  />
                 </th>
-                <th className="p-4">Image</th>
-                <th className="p-4">Title</th>
-                <th className="p-4">Case Type</th>
-                <th className="p-4">Brand</th>
-                <th className="p-4">Category</th>
-                <th className="p-4">Price</th>
-                <th className="p-4">Stock</th>
-                <th className="p-4">Featured</th>
-                <th className="p-4">Status</th>
-                <th className="p-4">Actions</th>
+                <th className="py-3.5 px-4 min-w-[220px]">Product</th>
+                <th className="py-3.5 px-4 min-w-[130px]">Compatibility</th>
+                <th className="py-3.5 px-4 min-w-[90px]">Price</th>
+                <th className="py-3.5 px-4 min-w-[200px]">Stock & Models</th>
+                <th className="py-3.5 px-4 min-w-[110px]">Status</th>
+                <th className="py-3.5 px-4 min-w-[100px] text-right">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-white/[0.04]">
               {loading ? (
-                <tr><td colSpan={11} className="p-8 text-center text-white/40">Loading…</td></tr>
+                <tr>
+                  <td colSpan={7} className="p-12 text-center text-white/40">
+                    <div className="inline-flex items-center gap-2">
+                      <span className="w-4 h-4 rounded-full border-2 border-brand border-t-transparent animate-spin" />
+                      <span>Loading phone cases…</span>
+                    </div>
+                  </td>
+                </tr>
               ) : data.items.length === 0 ? (
-                <tr><td colSpan={11} className="p-8 text-center text-white/40">{isTrashView ? "Trash is empty" : "No phone cases yet"}</td></tr>
+                <tr>
+                  <td colSpan={7} className="p-12 text-center text-white/40">
+                    <div className="space-y-3">
+                      <p>{isTrashView ? "Trash is empty." : "No phone cases match your search or filter."}</p>
+                      {!isTrashView && (
+                        <button
+                          type="button"
+                          onClick={openCreate}
+                          className="btn-primary text-xs py-1.5 px-4 inline-flex items-center gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add Phone Case</span>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
               ) : (
-                data.items.map((item) => (
-                  <tr key={item.id} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="p-4">
-                      <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} />
-                    </td>
-                    <td className="p-4">
-                      <img
-                        src={resolveMediaUrl(item.thumbnail)}
-                        alt=""
-                        className="w-10 h-12 object-cover rounded-lg"
-                      />
-                    </td>
-                    <td className="p-4 font-medium max-w-[180px]" title={item.title}>
-                      <span className="truncate block">{displayTemplateTitle(item.title)}</span>
-                      {item.design_id && (
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-brand/80">
-                          Linked design
+                data.items.map((item) => {
+                  const isSelected = selected.has(item.id);
+                  const isExpanded = expandedStockIds.has(item.id);
+                  const variants = item.variants || [];
+                  const outCount = variants.filter(isVariantOut).length;
+                  const visibleVariants = isExpanded || variants.length <= 2 ? variants : variants.slice(0, 2);
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`hover:bg-white/[0.03] transition-colors ${
+                        isSelected ? "bg-brand/[0.04]" : ""
+                      }`}
+                    >
+                      {/* 1. Selection Checkbox */}
+                      <td className="py-3.5 px-4 text-center align-middle">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(item.id)}
+                          aria-label={`Select ${item.title}`}
+                          className="rounded border-white/20 bg-white/5 cursor-pointer accent-[#6DB161]"
+                        />
+                      </td>
+
+                      {/* 2. Product Info (Image + Title + Badges) */}
+                      <td className="py-3.5 px-4 align-middle">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={resolveMediaUrl(item.thumbnail)}
+                            alt=""
+                            className="w-11 h-13 object-cover rounded-lg shrink-0 bg-white/5 border border-white/10 shadow-sm"
+                            loading="lazy"
+                          />
+                          <div className="min-w-0 max-w-[220px] lg:max-w-[260px]">
+                            <span
+                              className="font-medium text-white text-sm truncate block hover:text-brand transition-colors cursor-pointer"
+                              title={item.title}
+                              onClick={() => openEdit(item)}
+                            >
+                              {displayTemplateTitle(item.title)}
+                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-medium whitespace-nowrap">
+                                {productTypeLabel(normalizeProductType(item.product_type))}
+                              </span>
+                              {item.category && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/40">
+                                  {item.category}
+                                </span>
+                              )}
+                              {item.design_id && (
+                                <span className="text-[9px] font-mono uppercase tracking-wider text-brand bg-brand/10 border border-brand/20 px-1.5 py-0.2 rounded">
+                                  Linked
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* 3. Compatibility (Brands & Model Count) */}
+                      <td className="py-3.5 px-4 align-middle text-xs">
+                        <div className="text-white/90 font-medium">
+                          {Array.isArray(item.compatibility) && item.compatibility.length > 0 ? (
+                            item.compatibility.length > 2 ? (
+                              <span title={item.compatibility.map((c) => c.brand).join(", ")}>
+                                {item.compatibility.slice(0, 2).map((c) => c.brand).join(", ")}
+                                <span className="text-white/40 text-[10px] ml-1 bg-white/10 px-1.5 py-0.5 rounded-full">
+                                  +{item.compatibility.length - 2}
+                                </span>
+                              </span>
+                            ) : (
+                              item.compatibility.map((c) => c.brand).join(", ")
+                            )
+                          ) : (
+                            item.phone_brand || "All"
+                          )}
+                        </div>
+                        <div className="text-[11px] text-white/40 mt-0.5">
+                          {variants.length > 0
+                            ? `${variants.length} models`
+                            : Array.isArray(item.phone_models) && item.phone_models.length > 0
+                            ? `${item.phone_models.length} models`
+                            : "Single model"}
+                        </div>
+                      </td>
+
+                      {/* 4. Price */}
+                      <td className="py-3.5 px-4 align-middle">
+                        <div className="font-semibold text-white text-sm">
+                          {formatPrice(item.sale_price || item.price)}
+                        </div>
+                        {item.sale_price != null && Number(item.sale_price) < Number(item.price) && (
+                          <div className="text-[11px] text-white/40 line-through">
+                            {formatPrice(item.price)}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 5. Stock & Model Availability Controls */}
+                      <td className="py-3.5 px-4 align-middle">
+                        {variants.length === 0 ? (
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-medium px-2.5 py-0.5 rounded-full ${
+                              Number(item.stock) > 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+                            }`}>
+                              {Number(item.stock) > 0 ? `${item.stock} in stock` : "Out of stock"}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5 max-w-[210px]">
+                            <div className="flex items-center justify-between gap-1 text-[11px]">
+                              <span className={`font-medium ${outCount > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                                {outCount === 0 ? "All in stock" : `${outCount} of ${variants.length} out`}
+                              </span>
+                              {variants.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleStockExpand(item.id)}
+                                  className="text-brand hover:underline inline-flex items-center gap-0.5 text-[10px] cursor-pointer"
+                                  aria-expanded={isExpanded}
+                                >
+                                  {isExpanded ? "Collapse" : `+${variants.length - 2} more`}
+                                  {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </button>
+                              )}
+                            </div>
+
+                            <ul className="space-y-1 pt-0.5">
+                              {visibleVariants.map((variant) => {
+                                const out = isVariantOut(variant);
+                                return (
+                                  <li
+                                    key={variant.variant_id}
+                                    className="flex items-center justify-between gap-2 p-1.5 rounded bg-white/[0.03] border border-white/5 text-[11px]"
+                                  >
+                                    <span className="min-w-0 truncate">
+                                      <span className="block truncate text-white/80 font-medium">
+                                        {variant.model_name}
+                                      </span>
+                                      <span className={`text-[10px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
+                                        {out ? "Out of stock" : `${variant.stock_quantity ?? 0} in stock`}
+                                      </span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={out}
+                                      aria-label={`${out ? "Mark in stock" : "Mark out of stock"}: ${variant.model_name}`}
+                                      title={out ? "Mark in stock" : "Mark out of stock"}
+                                      data-testid={`variant-oos-toggle-${variant.variant_id}`}
+                                      disabled={isTrashView}
+                                      onClick={() => requestToggleVariantOutOfStock(item, variant)}
+                                      className="shrink-0 disabled:opacity-40"
+                                    >
+                                      <StockSwitchKnob on={out} />
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 6. Status & Featured Toggle */}
+                      <td className="py-3.5 px-4 align-middle">
+                        <div className="flex items-center gap-2">
+                          {isTrashView ? (
+                            <span className="text-xs px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 font-medium">
+                              Trashed
+                            </span>
+                          ) : (
+                            <>
+                              <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${
+                                item.status === "published"
+                                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                                  : "bg-white/10 text-white/60 border border-white/10"
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${item.status === "published" ? "bg-emerald-400 animate-pulse" : "bg-white/40"}`} />
+                                <span className="capitalize">{item.status}</span>
+                              </span>
+
+                              <button
+                                type="button"
+                                onClick={() => requestToggleFeature(item)}
+                                className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                                  item.featured ? "text-amber-400 hover:bg-amber-400/10" : "text-white/20 hover:text-white/60 hover:bg-white/5"
+                                }`}
+                                title={item.featured ? "Remove from featured" : "Add to featured"}
+                                aria-label={item.featured ? "Remove from featured" : "Add to featured"}
+                              >
+                                <Star className={`w-4 h-4 ${item.featured ? "fill-current" : ""}`} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* 7. Row Actions */}
+                      <td className="py-3.5 px-4 align-middle text-right">
+                        <div className="inline-flex items-center justify-end gap-1 relative">
+                          {isTrashView ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => requestRestore(item)}
+                                className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                                title="Restore"
+                                aria-label="Restore"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => requestPermanentDelete(item)}
+                                className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                                title="Delete permanently"
+                                aria-label="Delete permanently"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openEdit(item)}
+                                className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                title="Edit"
+                                aria-label="Edit"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setPreviewItem(item)}
+                                className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                title="Preview"
+                                aria-label="Preview"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenActionMenuId(openActionMenuId === item.id ? null : item.id);
+                                  }}
+                                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                    openActionMenuId === item.id ? "bg-white/20 text-white" : "text-white/50 hover:text-white hover:bg-white/10"
+                                  }`}
+                                  title="More actions"
+                                  aria-label="More actions"
+                                  aria-haspopup="true"
+                                  aria-expanded={openActionMenuId === item.id}
+                                >
+                                  <MoreVertical className="w-4 h-4" />
+                                </button>
+
+                                {openActionMenuId === item.id && (
+                                  <div
+                                    className="absolute right-0 top-full mt-1 z-30 w-44 rounded-xl glass-2 border border-white/15 shadow-2xl py-1 text-xs backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => { setOpenActionMenuId(null); duplicate(item); }}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 text-left transition-colors cursor-pointer"
+                                      title="Duplicate"
+                                    >
+                                      <Copy className="w-3.5 h-3.5 text-white/60" />
+                                      <span>Duplicate</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => { setOpenActionMenuId(null); requestToggleStatus(item); }}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 text-left transition-colors cursor-pointer"
+                                      title={item.status === "published" ? "Unpublish" : "Publish"}
+                                    >
+                                      {item.status === "published" ? (
+                                        <>
+                                          <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                                          <span>Unpublish</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                                          <span>Publish</span>
+                                        </>
+                                      )}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => { setOpenActionMenuId(null); requestToggleFeature(item); }}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 text-left transition-colors cursor-pointer"
+                                      title={item.featured ? "Remove from featured" : "Add to featured"}
+                                    >
+                                      <Star className={`w-3.5 h-3.5 ${item.featured ? "text-amber-400 fill-current" : "text-white/60"}`} />
+                                      <span>{item.featured ? "Unfeature" : "Feature"}</span>
+                                    </button>
+
+                                    <div className="my-1 border-t border-white/10" />
+
+                                    <button
+                                      type="button"
+                                      onClick={() => { setOpenActionMenuId(null); requestMoveToTrash(item); }}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-red-400 hover:text-red-300 hover:bg-red-500/15 text-left transition-colors cursor-pointer"
+                                      title="Move to trash"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>Move to trash</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Responsive Mobile Cards View (< 768px) */}
+        <div className="md:hidden divide-y divide-white/[0.06]">
+          {loading ? (
+            <div className="p-12 text-center text-white/40">
+              <div className="inline-flex items-center gap-2">
+                <span className="w-4 h-4 rounded-full border-2 border-brand border-t-transparent animate-spin" />
+                <span>Loading phone cases…</span>
+              </div>
+            </div>
+          ) : data.items.length === 0 ? (
+            <div className="p-12 text-center text-white/40 space-y-3">
+              <p>{isTrashView ? "Trash is empty." : "No phone cases found."}</p>
+              {!isTrashView && (
+                <button
+                  type="button"
+                  onClick={openCreate}
+                  className="btn-primary text-xs py-1.5 px-4 inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Phone Case</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            data.items.map((item) => {
+              const isSelected = selected.has(item.id);
+              const isExpanded = expandedStockIds.has(item.id);
+              const variants = item.variants || [];
+              const outCount = variants.filter(isVariantOut).length;
+              const visibleVariants = isExpanded ? variants : variants.slice(0, 1);
+
+              return (
+                <div
+                  key={item.id}
+                  className={`p-4 space-y-3 transition-colors ${isSelected ? "bg-brand/[0.04]" : ""}`}
+                >
+                  {/* Top row: Checkbox, Thumbnail, Title, Case Type, Status */}
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(item.id)}
+                      aria-label={`Select ${item.title}`}
+                      className="mt-1 rounded border-white/20 bg-white/5 cursor-pointer accent-[#6DB161]"
+                    />
+                    <img
+                      src={resolveMediaUrl(item.thumbnail)}
+                      alt=""
+                      className="w-12 h-14 object-cover rounded-lg shrink-0 bg-white/5 border border-white/10"
+                      loading="lazy"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <h3
+                        className="font-medium text-white text-sm truncate hover:text-brand cursor-pointer"
+                        title={item.title}
+                        onClick={() => openEdit(item)}
+                      >
+                        {displayTemplateTitle(item.title)}
+                      </h3>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/70 font-medium">
+                          {productTypeLabel(normalizeProductType(item.product_type))}
+                        </span>
+                        {item.category && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/40">
+                            {item.category}
+                          </span>
+                        )}
+                        {item.design_id && (
+                          <span className="text-[9px] font-mono uppercase tracking-wider text-brand bg-brand/10 border border-brand/20 px-1 py-0.2 rounded">
+                            Linked
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {/* Status pill */}
+                    <div className="shrink-0">
+                      {isTrashView ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-medium">
+                          Trashed
+                        </span>
+                      ) : (
+                        <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                          item.status === "published"
+                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                            : "bg-white/10 text-white/50"
+                        }`}>
+                          <span className={`w-1 h-1 rounded-full ${item.status === "published" ? "bg-emerald-400" : "bg-white/40"}`} />
+                          <span className="capitalize">{item.status}</span>
                         </span>
                       )}
-                    </td>
-                    <td className="p-4 text-white/60 text-xs max-w-[120px]">
-                      {productTypeLabel(normalizeProductType(item.product_type))}
-                    </td>
-                    <td className="p-4 text-white/60">{item.phone_brand}</td>
-                    <td className="p-4 text-white/60">{item.category}</td>
-                    <td className="p-4">{formatPrice(item.sale_price || item.price)}</td>
-                    <td className="p-4 align-top">
-                      {(item.variants || []).length === 0 ? (
-                        item.stock
-                      ) : (
-                        <ul className="space-y-1.5 min-w-[180px]">
-                          {item.variants.map((variant) => {
+                    </div>
+                  </div>
+
+                  {/* 2-Column Info: Price & Compatibility */}
+                  <div className="grid grid-cols-2 gap-2 text-xs py-2 border-y border-white/5">
+                    <div>
+                      <span className="text-white/40 text-[10px] block">Price</span>
+                      <span className="font-semibold text-white">
+                        {formatPrice(item.sale_price || item.price)}
+                      </span>
+                      {item.sale_price != null && Number(item.sale_price) < Number(item.price) && (
+                        <span className="text-[10px] text-white/40 line-through ml-1.5">
+                          {formatPrice(item.price)}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-white/40 text-[10px] block">Compatibility</span>
+                      <span className="text-white/80 truncate block font-medium">
+                        {Array.isArray(item.compatibility) && item.compatibility.length > 0
+                          ? item.compatibility.map((c) => c.brand).join(", ")
+                          : item.phone_brand || "All"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Stock & Models */}
+                  <div>
+                    {variants.length === 0 ? (
+                      <div className="text-xs text-white/60">
+                        Stock: <span className="text-white font-medium">{item.stock}</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-white/50">
+                            Models ({variants.length}) ·{" "}
+                            <span className={outCount > 0 ? "text-amber-400" : "text-emerald-400"}>
+                              {outCount > 0 ? `${outCount} out` : "All in stock"}
+                            </span>
+                          </span>
+                          {variants.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => toggleStockExpand(item.id)}
+                              className="text-brand hover:underline text-[11px] flex items-center gap-0.5 cursor-pointer"
+                              aria-expanded={isExpanded}
+                            >
+                              {isExpanded ? "Collapse" : `+${variants.length - 1} more`}
+                              {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
+                          )}
+                        </div>
+
+                        <ul className="space-y-1">
+                          {visibleVariants.map((variant) => {
                             const out = isVariantOut(variant);
                             return (
-                              <li key={variant.variant_id} className="flex items-center justify-between gap-2">
-                                <span className="min-w-0">
-                                  <span className="block truncate text-xs">{variant.model_name}</span>
+                              <li
+                                key={variant.variant_id}
+                                className="flex items-center justify-between text-xs p-1.5 rounded bg-white/[0.02] border border-white/5"
+                              >
+                                <span className="truncate pr-2">
+                                  <span className="text-white/80 block truncate font-medium">{variant.model_name}</span>
                                   <span className={`text-[10px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
-                                    {out ? "Out of stock" : `${variant.stock_quantity} in stock`}
+                                    {out ? "Out of stock" : `${variant.stock_quantity ?? 0} in stock`}
                                   </span>
                                 </span>
                                 <button
@@ -1032,7 +2050,6 @@ export default function AdminTemplateProducts() {
                                   data-testid={`variant-oos-toggle-${variant.variant_id}`}
                                   disabled={isTrashView}
                                   onClick={() => requestToggleVariantOutOfStock(item, variant)}
-                                  className="shrink-0 disabled:opacity-40"
                                 >
                                   <StockSwitchKnob on={out} />
                                 </button>
@@ -1040,86 +2057,163 @@ export default function AdminTemplateProducts() {
                             );
                           })}
                         </ul>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      {isTrashView ? (
-                        <span className="text-white/20">—</span>
-                      ) : (
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card Actions Footer */}
+                  <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs">
+                    {!isTrashView ? (
+                      <>
                         <button
+                          type="button"
                           onClick={() => requestToggleFeature(item)}
-                          className={item.featured ? "text-brand" : "text-white/30"}
+                          className={`flex items-center gap-1.5 py-1 px-2 rounded-lg text-xs cursor-pointer ${
+                            item.featured ? "text-amber-400 bg-amber-400/10" : "text-white/40 hover:text-white"
+                          }`}
                           title={item.featured ? "Remove from featured" : "Add to featured"}
                         >
-                          <Star className={`w-4 h-4 ${item.featured ? "fill-current" : ""}`} />
+                          <Star className={`w-3.5 h-3.5 ${item.featured ? "fill-current" : ""}`} />
+                          <span>{item.featured ? "Featured" : "Feature"}</span>
                         </button>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      {isTrashView ? (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">trashed</span>
-                      ) : (
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          item.status === "published"
-                            ? "bg-green-500/20 text-green-400"
-                            : "bg-white/10 text-white/50"
-                        }`}>
-                          {item.status}
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex gap-1">
-                        {isTrashView ? (
-                          <>
-                            <button onClick={() => requestRestore(item)} className="p-1.5 rounded hover:bg-white/10 text-emerald-400" title="Restore">
-                              <RotateCcw className="w-3.5 h-3.5" />
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewItem(item)}
+                            className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 cursor-pointer"
+                            title="Preview"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEdit(item)}
+                            className="btn-secondary text-xs py-1 px-3 flex items-center gap-1.5 cursor-pointer"
+                            title="Edit"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenActionMenuId(openActionMenuId === item.id ? null : item.id);
+                              }}
+                              className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 cursor-pointer"
+                              title="More actions"
+                            >
+                              <MoreVertical className="w-4 h-4" />
                             </button>
-                            <button onClick={() => requestPermanentDelete(item)} className="p-1.5 rounded hover:bg-white/10 text-red-400" title="Delete permanently">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button onClick={() => requestMoveToTrash(item)} className="p-1.5 rounded hover:bg-white/10 text-red-400" title="Move to trash">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => requestToggleFeature(item)} className={`p-1.5 rounded hover:bg-white/10 ${item.featured ? "text-brand" : "text-white/50"}`} title={item.featured ? "Remove from featured" : "Add to featured"}>
-                              <Star className={`w-3.5 h-3.5 ${item.featured ? "fill-current" : ""}`} />
-                            </button>
-                            <button onClick={() => setPreviewItem(item)} className="p-1.5 rounded hover:bg-white/10" title="Preview">
-                              <Eye className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => openEdit(item)} className="p-1.5 rounded hover:bg-white/10" title="Edit">
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => duplicate(item)} className="p-1.5 rounded hover:bg-white/10" title="Duplicate">
-                              <Copy className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => requestToggleStatus(item)} className="p-1.5 rounded hover:bg-white/10" title={item.status === "published" ? "Unpublish" : "Publish"}>
-                              {item.status === "published" ? <EyeOff className="w-3.5 h-3.5" /> : <Globe className="w-3.5 h-3.5" />}
-                            </button>
-                          </>
-                        )}
+                            {openActionMenuId === item.id && (
+                              <div
+                                className="absolute right-0 bottom-full mb-1 z-30 w-44 rounded-xl glass-2 border border-white/15 shadow-2xl py-1 text-xs backdrop-blur-xl"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => { setOpenActionMenuId(null); duplicate(item); }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
+                                  title="Duplicate"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Duplicate</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setOpenActionMenuId(null); requestToggleStatus(item); }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
+                                  title={item.status === "published" ? "Unpublish" : "Publish"}
+                                >
+                                  {item.status === "published" ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Globe className="w-3.5 h-3.5 text-emerald-400" />}
+                                  <span>{item.status === "published" ? "Unpublish" : "Publish"}</span>
+                                </button>
+                                <div className="my-1 border-t border-white/10" />
+                                <button
+                                  type="button"
+                                  onClick={() => { setOpenActionMenuId(null); requestMoveToTrash(item); }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 text-red-400 hover:bg-red-500/10 cursor-pointer"
+                                  title="Move to trash"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Move to trash</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center justify-end gap-2 w-full">
+                        <button
+                          type="button"
+                          onClick={() => requestRestore(item)}
+                          className="btn-secondary text-xs py-1 px-3 text-emerald-400 flex items-center gap-1.5 cursor-pointer"
+                          title="Restore"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Restore</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => requestPermanentDelete(item)}
+                          className="btn-secondary text-xs py-1 px-3 text-red-400 flex items-center gap-1.5 cursor-pointer"
+                          title="Delete permanently"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
                       </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
+
+        {/* Pagination Bar */}
         {data.pages > 1 && (
-          <div className="p-4 flex justify-center gap-2">
-            {Array.from({ length: data.pages }, (_, i) => i + 1).map((p) => (
+          <div className="p-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-3 text-xs text-white/60 bg-white/[0.01]">
+            <div>
+              Showing page <span className="text-white font-medium">{data.page}</span> of{" "}
+              <span className="text-white font-medium">{data.pages}</span>
+              {data.total ? ` (${data.total} total cases)` : ""}
+            </div>
+            <div className="flex items-center gap-1.5">
               <button
-                key={p}
-                onClick={() => load(p)}
-                className={`w-8 h-8 rounded text-xs ${p === data.page ? "bg-brand text-white" : "glass-2"}`}
+                type="button"
+                onClick={() => load(Math.max(1, data.page - 1))}
+                disabled={data.page <= 1}
+                className="px-2.5 py-1.5 rounded-lg glass-2 text-white/70 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                {p}
+                Previous
               </button>
-            ))}
+              {Array.from({ length: data.pages }, (_, i) => i + 1).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => load(p)}
+                  className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${
+                    p === data.page
+                      ? "bg-brand text-white shadow-md shadow-brand/20 font-bold"
+                      : "glass-2 text-white/70 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => load(Math.min(data.pages, data.page + 1))}
+                disabled={data.page >= data.pages}
+                className="px-2.5 py-1.5 rounded-lg glass-2 text-white/70 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1198,7 +2292,7 @@ export default function AdminTemplateProducts() {
             {/* Modal Body with independent scroll */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 custom-scrollbar">
               {/* Section 1: Product details */}
-              <fieldset className="rounded-xl border border-white/10 p-4 sm:p-5 bg-white/[0.02] space-y-4">
+              <fieldset id="product-details-fields" className="rounded-xl border border-white/10 p-4 sm:p-5 bg-white/[0.02] space-y-4">
                 <legend className="px-2 text-xs font-semibold uppercase tracking-wider text-brand flex items-center gap-1.5">
                   <Layers className="w-3.5 h-3.5" /> Product details
                 </legend>
@@ -1298,57 +2392,146 @@ export default function AdminTemplateProducts() {
 
               {/* Section 2: Compatible devices */}
               <fieldset className="rounded-xl border border-white/10 p-4 sm:p-5 bg-white/[0.02] space-y-4">
-                <legend className="px-2 text-xs font-semibold uppercase tracking-wider text-brand flex items-center gap-1.5">
-                  <Smartphone className="w-3.5 h-3.5" /> Compatible devices
-                </legend>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <legend className="px-2 text-xs font-semibold uppercase tracking-wider text-brand flex items-center gap-1.5 float-none mb-0">
+                    <Smartphone className="w-3.5 h-3.5" /> Compatible devices
+                  </legend>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBrandSearchQuery("");
+                      setNewBrandInput("");
+                      setShowAddBrandModal(true);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-brand/20 text-brand hover:bg-brand/30 transition-colors border border-brand/30"
+                    data-testid="add-brand-header-btn"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add brand</span>
+                  </button>
+                </div>
+
+                {/* Configured brands summary & tabs */}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/60">
+                    <span>Configured brand groups ({form.compatibility?.length || 0}):</span>
+                    <span className="text-white/40">Total models selected: {form.phone_models?.length || 0}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2" data-testid="configured-brands-list">
+                    {(form.compatibility || []).map((group) => {
+                      const isActive = group.brand.toLowerCase() === activeBrandName.toLowerCase();
+                      return (
+                        <div
+                          key={group.brand}
+                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition-colors cursor-pointer ${
+                            isActive
+                              ? "border-brand bg-brand/10 text-white font-medium ring-1 ring-brand/30"
+                              : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                          }`}
+                          onClick={() => handleBrandSelect(group.brand)}
+                          data-testid={`brand-pill-${group.brand.toLowerCase().replace(/\s+/g, "-")}`}
+                        >
+                          <span>{group.brand}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] ${isActive ? "bg-brand/20 text-brand" : "bg-white/10 text-white/50"}`}>
+                            {group.models.length} {group.models.length === 1 ? "model" : "models"}
+                          </span>
+                          {(form.compatibility || []).length > 1 && (
+                            <button
+                              type="button"
+                              title={`Remove ${group.brand}`}
+                              className="p-0.5 rounded hover:bg-red-500/20 hover:text-red-300 text-white/40"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveBrand(group.brand);
+                              }}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBrandSearchQuery("");
+                        setNewBrandInput("");
+                        setShowAddBrandModal(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-white/20 bg-white/[0.03] text-xs text-white/70 hover:text-white hover:border-brand/50 hover:bg-white/[0.06] transition-colors"
+                      data-testid="add-brand-pill"
+                    >
+                      <Plus className="w-3 h-3 text-brand" />
+                      <span>Add brand</span>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Field label="Phone brand" required hint="Changing brand clears models to prevent mismatched device saves.">
+                  <Field
+                    label="Currently editing brand"
+                    required
+                    hint="Select or add a brand. Switching brands preserves existing brand and model selections."
+                  >
                     <select
-                      value={form.phone_brand}
-                      onChange={(e) => handleBrandChange(e.target.value)}
+                      value={activeBrandName}
+                      onChange={(e) => handleBrandSelect(e.target.value)}
                       className="form-field"
                       data-testid="phone-brand-select"
                     >
-                      {brands.length > 0 ? (
-                        brands.map((b) => (
-                          <option key={b.id || b.name} value={b.name}>
-                            {b.name}
-                          </option>
-                        ))
-                      ) : (
-                        TEMPLATE_PHONE_BRANDS.map((b) => (
-                          <option key={b} value={b}>
-                            {b}
-                          </option>
-                        ))
+                      {(form.compatibility || []).length > 0 && (
+                        <optgroup label="Configured for this product">
+                          {(form.compatibility || []).map((g) => (
+                            <option key={g.brand} value={g.brand}>
+                              {g.brand} ({g.models?.length || 0} models)
+                            </option>
+                          ))}
+                        </optgroup>
                       )}
+                      {availableCatalogBrands.length > 0 && (
+                        <optgroup label="Add from catalog">
+                          {availableCatalogBrands.map((b) => (
+                            <option key={b.id || b.name} value={b.name}>
+                              + {b.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="New brand">
+                        <option value="__add_new_brand__">+ Add brand to catalog...</option>
+                      </optgroup>
                     </select>
                   </Field>
                   <div className="flex items-end">
-                    <div className="rounded-lg border border-white/10 p-2.5 bg-white/[0.02] w-full text-xs text-white/50">
-                      Active brand: <span className="text-white font-medium">{form.phone_brand || "None"}</span> · Catalog models: <span className="text-brand font-medium">{brandModels.length}</span>
+                    <div className="rounded-lg border border-white/10 p-2.5 bg-white/[0.02] w-full text-xs text-white/50 flex items-center justify-between">
+                      <div>
+                        Active: <span className="text-white font-medium">{activeBrandName || "None"}</span> · Models: <span className="text-brand font-medium">{brandModels.length}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBrandSearchQuery("");
+                          setNewBrandInput("");
+                          setShowAddBrandModal(true);
+                        }}
+                        className="text-brand hover:underline font-medium ml-2"
+                        data-testid="add-brand-quick-link"
+                      >
+                        + Add brand
+                      </button>
                     </div>
                   </div>
                   <div className="md:col-span-2">
                     <ModelMultiSelect
-                      brandName={form.phone_brand}
+                      brandName={activeBrandName}
                       brandId={selectedBrandObj?.id}
                       models={brandModels}
-                      value={form.phone_models}
+                      value={activeGroupModels}
                       loading={loadingModels}
                       onManageClick={() => setShowBrandModelManager(true)}
                       onModelAdded={handleModelAdded}
-                      onChange={(phone_models) => {
-                        setForm((current) => ({
-                          ...current,
-                          phone_models,
-                          variant_inventory: syncVariantRows(
-                            phone_models,
-                            current.variant_inventory,
-                            current.stock
-                          ),
-                        }));
-                      }}
+                      onChange={handleActiveBrandModelsChange}
                       testId="phone-case-models"
                     />
                   </div>
@@ -1398,28 +2581,9 @@ export default function AdminTemplateProducts() {
                   One shop listing is shown for this design. Each material keeps its own price, description, SKU, stock, and device compatibility. Existing product IDs are preserved.
                 </p>
 
-                {/* Primary/root material indicator */}
-                <div className="rounded-xl border border-brand/30 bg-brand/5 p-3.5 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-brand text-black">
-                        Primary Material
-                      </span>
-                      <span className="text-sm font-semibold text-white">
-                        {caseTypes.find((c) => c.slug === form.case_type)?.name || form.case_type || "None selected"}
-                      </span>
-                    </div>
-                    <span className="text-xs text-white/50">Default storefront option</span>
-                  </div>
-                  <div className="text-xs text-white/70">
-                    Price: <span className="text-brand font-medium">{form.price ? formatPrice(form.sale_price || form.price) : "Not set"}</span>
-                    {form.sku ? ` · SKU: ${form.sku}` : ""}
-                    {form.stock ? ` · ${form.stock} units` : ""}
-                  </div>
-                  <div className="text-[11px] text-white/40">
-                    Inherits all {form.phone_models.length} selected phone model(s). Set above in Product Details.
-                  </div>
-                </div>
+                <p className="text-[11px] text-white/50">
+                  The primary material is <strong className="text-white">{caseTypes.find((c) => c.slug === form.case_type)?.name || form.case_type}</strong>. You can click <strong className="text-brand">Edit details</strong> on any material row below (including the primary material) to edit price, stock, description, and compatibility.
+                </p>
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -1433,19 +2597,26 @@ export default function AdminTemplateProducts() {
                   {materialSiblings.map((row) => {
                     const out = Number(row.stock) <= 0;
                     const isCurrent = row.id === editing.id;
+                    const isDefault = Boolean(row.is_default || (!materialSiblings.some((s) => s.is_default) && isCurrent));
                     const hasCustomModels = Array.isArray(row.phone_models) && row.phone_models.length > 0;
+                    const cName = caseTypes.find((c) => c.slug === row.case_type)?.name || row.case_type;
                     return (
                       <div key={row.id} className={`rounded-lg border px-3 py-2 space-y-1 ${isCurrent ? "border-brand/40 bg-brand/[0.03]" : "border-white/10 bg-white/[0.01]"}`}>
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-sm truncate font-medium text-white">
-                                {caseTypes.find((c) => c.slug === row.case_type)?.name || row.case_type}
+                                {cName}
                                 {row.material ? ` (${row.material})` : ""}
                               </span>
                               {isCurrent && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-brand/20 text-brand font-medium">
-                                  Currently Editing
+                                  Primary Material
+                                </span>
+                              )}
+                              {isDefault && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-medium">
+                                  Default (Storefront)
                                 </span>
                               )}
                             </div>
@@ -1463,15 +2634,33 @@ export default function AdminTemplateProducts() {
                             )}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            {!isCurrent && (
+                            {/* Set as default action */}
+                            {isDefault ? (
+                              <span className="text-[11px] text-emerald-400 font-medium px-1.5 py-0.5 rounded bg-emerald-500/10">
+                                ✓ Default
+                              </span>
+                            ) : (
                               <button
                                 type="button"
-                                className="text-[11px] text-white/60 hover:text-white"
-                                onClick={() => openEdit(row)}
+                                className="text-[11px] text-white/60 hover:text-emerald-300 font-medium"
+                                onClick={() => handleSetDefaultVariant(row)}
+                                disabled={materialSaving}
+                                data-testid={`set-default-btn-${row.id}`}
                               >
-                                Edit
+                                Set as default
                               </button>
                             )}
+
+                            {/* Edit details action - available for ALL materials including primary */}
+                            <button
+                              type="button"
+                              className="text-[11px] text-brand hover:text-brand-light font-medium"
+                              onClick={() => setEditingVariantId(editingVariantId === row.id ? null : row.id)}
+                              data-testid={`edit-variant-btn-${row.id}`}
+                            >
+                              {editingVariantId === row.id ? "Close" : "Edit details"}
+                            </button>
+
                             <button
                               type="button"
                               className="text-[11px] text-white/60 hover:text-white"
@@ -1479,7 +2668,7 @@ export default function AdminTemplateProducts() {
                             >
                               {row.status === "published" ? "Disable" : "Enable"}
                             </button>
-                            {materialSiblings.length > 1 && (
+                            {materialSiblings.length > 1 && !isCurrent && (
                               <button
                                 type="button"
                                 className="text-[11px] text-white/50 hover:text-red-300"
@@ -1491,6 +2680,361 @@ export default function AdminTemplateProducts() {
                             )}
                           </div>
                         </div>
+
+                        {editingVariantId === row.id && (
+                          <div className="pt-3 border-t border-white/10 mt-2 space-y-3 bg-black/30 p-3 rounded-lg" data-testid={`edit-variant-panel-${row.id}`}>
+                            {isCurrent && (
+                              <div className="text-[11px] text-brand/90 bg-brand/10 px-2 py-1 rounded">
+                                Editing Primary Material — updates made here sync with the Product Details fields above.
+                              </div>
+                            )}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">Price (₹) *</label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  value={row.price}
+                                  onChange={(e) => updateSibling(row.id, "price", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                  data-testid={`variant-price-input-${row.id}`}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">Sale price (₹)</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={row.sale_price ?? ""}
+                                  onChange={(e) => updateSibling(row.id, "sale_price", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">Stock</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={row.stock}
+                                  onChange={(e) => updateSibling(row.id, "stock", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">SKU</label>
+                                <input
+                                  value={row.sku || ""}
+                                  onChange={(e) => updateSibling(row.id, "sku", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">Material spec</label>
+                                <input
+                                  placeholder="e.g. 9H Tempered Glass"
+                                  value={row.material || ""}
+                                  onChange={(e) => updateSibling(row.id, "material", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-white/50 block mb-1">Description</label>
+                                <input
+                                  placeholder="Shown when this material is selected"
+                                  value={row.description || ""}
+                                  onChange={(e) => updateSibling(row.id, "description", e.target.value)}
+                                  className="form-field text-xs py-1"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Variant Compatibility Section */}
+                            <div className="pt-2 border-t border-white/10 space-y-2">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                                <label className="text-[11px] font-semibold text-white/80">Device Compatibility for this Material</label>
+                                <div className="flex gap-3 text-xs">
+                                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-white/70 hover:text-white">
+                                    <input
+                                      type="radio"
+                                      name={`var_inherit_${row.id}`}
+                                      checked={!row.has_custom_compatibility && (!row.compatibility || row.compatibility.length === 0)}
+                                      onChange={() => {
+                                        updateSibling(row.id, "has_custom_compatibility", false);
+                                        updateSibling(row.id, "compatibility", []);
+                                        updateSibling(row.id, "phone_models", []);
+                                      }}
+                                      className="accent-brand"
+                                    />
+                                    Inherit all design models ({form.phone_models?.length || 0})
+                                  </label>
+                                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-white/70 hover:text-white">
+                                    <input
+                                      type="radio"
+                                      name={`var_inherit_${row.id}`}
+                                      checked={Boolean(row.has_custom_compatibility || (Array.isArray(row.compatibility) && row.compatibility.length > 0))}
+                                      onChange={() => {
+                                        const initialCompat = (form.compatibility || []).map((g) => ({
+                                          brand: g.brand,
+                                          models: [...(g.models || [])],
+                                        }));
+                                        updateSibling(row.id, "has_custom_compatibility", true);
+                                        updateSibling(row.id, "compatibility", initialCompat);
+                                        updateSibling(row.id, "phone_models", [...new Set(initialCompat.flatMap((g) => g.models))]);
+                                      }}
+                                      className="accent-brand"
+                                    />
+                                    Custom model selection
+                                  </label>
+                                </div>
+                              </div>
+
+                              {(row.has_custom_compatibility || (Array.isArray(row.compatibility) && row.compatibility.length > 0)) && (
+                                <div className="space-y-2 bg-black/40 p-2.5 rounded-lg border border-white/10 max-h-48 overflow-y-auto custom-scrollbar">
+                                  {(form.compatibility || []).map((brandGroup) => {
+                                    const brandName = brandGroup.brand;
+                                    const currentGroup = (row.compatibility || []).find(
+                                      (g) => g.brand.toLowerCase() === brandName.toLowerCase()
+                                    );
+                                    const selectedModels = currentGroup?.models || [];
+                                    const isAllSelected = brandGroup.models.length > 0 && brandGroup.models.every((m) => selectedModels.includes(m));
+
+                                    const toggleAllForBrand = () => {
+                                      let nextCompat = [...(row.compatibility || [])];
+                                      if (isAllSelected) {
+                                        nextCompat = nextCompat.filter((g) => g.brand.toLowerCase() !== brandName.toLowerCase());
+                                      } else {
+                                        const idx = nextCompat.findIndex((g) => g.brand.toLowerCase() === brandName.toLowerCase());
+                                        if (idx >= 0) {
+                                          nextCompat[idx] = { brand: brandName, models: [...brandGroup.models] };
+                                        } else {
+                                          nextCompat.push({ brand: brandName, models: [...brandGroup.models] });
+                                        }
+                                      }
+                                      const nextModels = [...new Set(nextCompat.flatMap((g) => g.models || []))];
+                                      updateSibling(row.id, "compatibility", nextCompat);
+                                      updateSibling(row.id, "phone_models", nextModels);
+                                    };
+
+                                    const toggleModel = (modelName) => {
+                                      let nextCompat = [...(row.compatibility || [])];
+                                      const idx = nextCompat.findIndex((g) => g.brand.toLowerCase() === brandName.toLowerCase());
+                                      let bModels = idx >= 0 ? [...nextCompat[idx].models] : [];
+
+                                      if (bModels.includes(modelName)) {
+                                        bModels = bModels.filter((m) => m !== modelName);
+                                      } else {
+                                        bModels.push(modelName);
+                                      }
+
+                                      if (bModels.length === 0) {
+                                        nextCompat = nextCompat.filter((g) => g.brand.toLowerCase() !== brandName.toLowerCase());
+                                      } else if (idx >= 0) {
+                                        nextCompat[idx] = { brand: brandName, models: bModels };
+                                      } else {
+                                        nextCompat.push({ brand: brandName, models: bModels });
+                                      }
+
+                                      const nextModels = [...new Set(nextCompat.flatMap((g) => g.models || []))];
+                                      updateSibling(row.id, "compatibility", nextCompat);
+                                      updateSibling(row.id, "phone_models", nextModels);
+                                    };
+
+                                    return (
+                                      <div key={brandName} className="space-y-1 pb-2 border-b border-white/5 last:border-b-0">
+                                        <div className="flex items-center justify-between text-xs font-medium text-white/90">
+                                          <span>{brandName} <span className="text-[10px] text-white/50">({selectedModels.length}/{brandGroup.models.length})</span></span>
+                                          <button
+                                            type="button"
+                                            onClick={toggleAllForBrand}
+                                            className="text-[10px] text-brand hover:underline"
+                                          >
+                                            {isAllSelected ? "Deselect all" : "Select all"}
+                                          </button>
+                                        </div>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-0.5">
+                                          {brandGroup.models.map((mName) => (
+                                            <label key={mName} className="inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white cursor-pointer truncate">
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedModels.includes(mName)}
+                                                onChange={() => toggleModel(mName)}
+                                                className="accent-brand rounded"
+                                              />
+                                              <span className="truncate">{mName}</span>
+                                            </label>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Per-model pricing & stock for this material variant */}
+                            {(() => {
+                              const rowCompat = Array.isArray(row.compatibility) && row.compatibility.length > 0 ? row.compatibility : form.compatibility;
+                              const rowModels = Array.isArray(row.phone_models) && row.phone_models.length > 0 ? row.phone_models : form.phone_models;
+                              const brandMap = {};
+                              (rowCompat || []).forEach((g) => {
+                                (g.models || []).forEach((m) => {
+                                  brandMap[m] = g.brand;
+                                });
+                              });
+                              const currentInv = syncVariantRows(
+                                rowModels,
+                                row.variants?.length ? row.variants : row.variant_inventory,
+                                row.stock ?? 0,
+                                row.price ?? "",
+                                row.sale_price ?? "",
+                                brandMap
+                              );
+                              if (!rowModels || rowModels.length === 0) return null;
+                              return (
+                                <div className="pt-2 border-t border-white/10 space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <label className="text-[11px] font-semibold text-white/80">
+                                      Model-Specific Pricing & Stock
+                                    </label>
+                                    <span className="text-[10px] text-white/40">
+                                      Total stock: {currentInv.reduce((acc, r) => acc + (r.is_out_of_stock ? 0 : (Number(r.stock_quantity) || 0)), 0)} units
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-white/40">
+                                    Leave price blank to inherit this material's price (₹{row.price || "0"}).
+                                  </p>
+                                  <div className="grid grid-cols-[minmax(0,1.2fr)_5rem_5rem_4.5rem_auto] items-center gap-2 px-2 text-[9px] font-semibold uppercase tracking-wider text-white/40">
+                                    <span>Model</span>
+                                    <span className="text-center">Price (₹)</span>
+                                    <span className="text-center">Sale (₹)</span>
+                                    <span className="text-center">Stock</span>
+                                    <span className="text-right">Out</span>
+                                  </div>
+                                  <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1 custom-scrollbar">
+                                    {currentInv.map((mRow, mIdx) => {
+                                      const out = isVariantOut(mRow);
+                                      return (
+                                        <div
+                                          key={mRow.variant_id || mRow.model_name}
+                                          className="grid grid-cols-[minmax(0,1.2fr)_5rem_5rem_4.5rem_auto] items-center gap-2 rounded-lg border border-white/10 px-2.5 py-1.5 bg-black/40"
+                                        >
+                                          <div className="min-w-0 overflow-hidden">
+                                            <div className="flex items-center gap-1.5 truncate">
+                                              {mRow.brand && (
+                                                <span className="text-[9px] px-1 py-0.5 rounded bg-white/10 text-white/60 shrink-0 font-medium">
+                                                  {mRow.brand}
+                                                </span>
+                                              )}
+                                              <span className="text-xs font-medium text-white truncate">{mRow.model_name}</span>
+                                            </div>
+                                            <div className={`text-[9px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
+                                              {out ? "Out of stock" : "In stock"}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="1"
+                                              placeholder={row.price ? String(row.price) : "Base"}
+                                              value={mRow.price ?? ""}
+                                              onChange={(e) => {
+                                                const next = [...currentInv];
+                                                next[mIdx] = { ...next[mIdx], price: e.target.value };
+                                                updateSibling(row.id, "variant_inventory", next);
+                                              }}
+                                              className="form-field !w-full min-w-0 text-center text-xs py-0.5"
+                                              aria-label={`Price for ${mRow.model_name}`}
+                                              data-testid={`variant-${row.id}-price-${mRow.variant_id || mIdx}`}
+                                            />
+                                          </div>
+                                          <div>
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="1"
+                                              placeholder="Sale"
+                                              value={mRow.sale_price ?? ""}
+                                              onChange={(e) => {
+                                                const next = [...currentInv];
+                                                next[mIdx] = { ...next[mIdx], sale_price: e.target.value };
+                                                updateSibling(row.id, "variant_inventory", next);
+                                              }}
+                                              className="form-field !w-full min-w-0 text-center text-xs py-0.5"
+                                              aria-label={`Sale price for ${mRow.model_name}`}
+                                              data-testid={`variant-${row.id}-sale-${mRow.variant_id || mIdx}`}
+                                            />
+                                          </div>
+                                          <div>
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="1"
+                                              value={mRow.stock_quantity}
+                                              onChange={(e) => {
+                                                const next = [...currentInv];
+                                                const qty = Number(e.target.value);
+                                                next[mIdx] = {
+                                                  ...next[mIdx],
+                                                  stock_quantity: e.target.value,
+                                                  is_out_of_stock: !Number.isFinite(qty) || qty <= 0,
+                                                };
+                                                updateSibling(row.id, "variant_inventory", next);
+                                              }}
+                                              className="form-field !w-full min-w-0 text-center text-xs py-0.5"
+                                              aria-label={`Stock for ${mRow.model_name}`}
+                                              data-testid={`variant-${row.id}-stock-${mRow.variant_id || mIdx}`}
+                                            />
+                                          </div>
+                                          <div className="flex items-center gap-1.5 justify-self-end shrink-0">
+                                            <button
+                                              type="button"
+                                              role="switch"
+                                              aria-checked={out}
+                                              aria-label={out ? `Mark ${mRow.model_name} in stock` : `Mark ${mRow.model_name} out of stock`}
+                                              title={out ? "Mark in stock" : "Mark out of stock"}
+                                              data-testid={`variant-${row.id}-oos-${mRow.variant_id || mIdx}`}
+                                              onClick={() => {
+                                                const next = [...currentInv];
+                                                next[mIdx] = { ...next[mIdx], is_out_of_stock: !out };
+                                                updateSibling(row.id, "variant_inventory", next);
+                                              }}
+                                            >
+                                              <StockSwitchKnob on={out} />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                className="btn-secondary text-xs py-1 px-3"
+                                onClick={() => setEditingVariantId(null)}
+                              >
+                                Done
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-primary text-xs py-1 px-3"
+                                onClick={() => saveSingleVariant(row)}
+                                disabled={materialSaving}
+                              >
+                                Save Variant
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1595,29 +3139,75 @@ export default function AdminTemplateProducts() {
                         </label>
                       </div>
                       {materialForm.inherit_models === false && (
-                        <div className="space-y-1.5 bg-black/20 p-2.5 rounded-lg border border-white/5 max-h-36 overflow-y-auto custom-scrollbar">
-                          <div className="text-[11px] text-white/50 mb-1">Select which models support this material:</div>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                            {form.phone_models.map((mName) => {
-                              const checked = (materialForm.phone_models || []).includes(mName);
-                              return (
-                                <label key={mName} className="inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white cursor-pointer truncate">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e) => {
-                                      const next = e.target.checked
-                                        ? [...(materialForm.phone_models || []), mName]
-                                        : (materialForm.phone_models || []).filter((m) => m !== mName);
-                                      setMaterialForm((curr) => ({ ...curr, phone_models: next }));
-                                    }}
-                                    className="accent-brand rounded"
-                                  />
-                                  <span className="truncate">{mName}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
+                        <div className="space-y-2 bg-black/20 p-2.5 rounded-lg border border-white/5 max-h-48 overflow-y-auto custom-scrollbar">
+                          <div className="text-[11px] text-white/50 mb-1">Select which brands and models support this material:</div>
+                          {(form.compatibility || []).map((brandGroup) => {
+                            const bName = brandGroup.brand;
+                            const bModels = brandGroup.models || [];
+                            const selectedInBrand = (materialForm.phone_models || []).filter((m) => bModels.includes(m));
+                            const allBrandSelected = bModels.length > 0 && bModels.every((m) => (materialForm.phone_models || []).includes(m));
+
+                            const toggleAllBrand = () => {
+                              let nextModels;
+                              if (allBrandSelected) {
+                                nextModels = (materialForm.phone_models || []).filter((m) => !bModels.includes(m));
+                              } else {
+                                nextModels = [...new Set([...(materialForm.phone_models || []), ...bModels])];
+                              }
+                              const nextCompat = (form.compatibility || []).map((g) => ({
+                                brand: g.brand,
+                                models: g.models.filter((m) => nextModels.includes(m)),
+                              })).filter((g) => g.models.length > 0);
+                              setMaterialForm((curr) => ({
+                                ...curr,
+                                phone_models: nextModels,
+                                compatibility: nextCompat,
+                              }));
+                            };
+
+                            const toggleSingle = (mName) => {
+                              const nextModels = (materialForm.phone_models || []).includes(mName)
+                                ? (materialForm.phone_models || []).filter((m) => m !== mName)
+                                : [...(materialForm.phone_models || []), mName];
+                              const nextCompat = (form.compatibility || []).map((g) => ({
+                                brand: g.brand,
+                                models: g.models.filter((m) => nextModels.includes(m)),
+                              })).filter((g) => g.models.length > 0);
+                              setMaterialForm((curr) => ({
+                                ...curr,
+                                phone_models: nextModels,
+                                compatibility: nextCompat,
+                              }));
+                            };
+
+                            return (
+                              <div key={bName} className="space-y-1 pb-2 border-b border-white/5 last:border-b-0">
+                                <div className="flex items-center justify-between text-xs font-medium text-white/90">
+                                  <span>{bName} <span className="text-[10px] text-white/50">({selectedInBrand.length}/{bModels.length})</span></span>
+                                  <button
+                                    type="button"
+                                    onClick={toggleAllBrand}
+                                    className="text-[10px] text-brand hover:underline"
+                                  >
+                                    {allBrandSelected ? "Deselect all" : "Select all"}
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-0.5">
+                                  {bModels.map((mName) => (
+                                    <label key={mName} className="inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white cursor-pointer truncate">
+                                      <input
+                                        type="checkbox"
+                                        checked={(materialForm.phone_models || []).includes(mName)}
+                                        onChange={() => toggleSingle(mName)}
+                                        className="accent-brand rounded"
+                                      />
+                                      <span className="truncate">{mName}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1683,17 +3273,46 @@ export default function AdminTemplateProducts() {
                 </p>
 
                 {/* Primary material indicator */}
-                <div className="rounded-xl border border-brand/30 bg-brand/5 p-3.5 space-y-1.5">
-                  <div className="flex items-center justify-between">
+                <div className="rounded-xl border border-brand/30 bg-brand/5 p-3.5 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-brand text-black">
                         Primary Material
                       </span>
                       <span className="text-sm font-semibold text-white">
                         {caseTypes.find((c) => c.slug === form.case_type)?.name || form.case_type || "None selected"}
+                        {form.material ? ` (${form.material})` : ""}
                       </span>
+                      {(!stagedDefaultCaseType || stagedDefaultCaseType === form.case_type) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-medium">
+                          Default (Storefront)
+                        </span>
+                      )}
                     </div>
-                    <span className="text-xs text-white/50">Default storefront option</span>
+                    <div className="flex items-center gap-2">
+                      {stagedDefaultCaseType && stagedDefaultCaseType !== form.case_type ? (
+                        <button
+                          type="button"
+                          onClick={() => setStagedDefaultCaseType("")}
+                          className="text-xs text-brand hover:underline font-medium"
+                          data-testid="set-primary-default-btn"
+                        >
+                          Set as default
+                        </button>
+                      ) : (
+                        <span className="text-xs text-emerald-400 font-medium">✓ Default</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById("product-details-fields");
+                          if (el) el.scrollIntoView({ behavior: "smooth" });
+                        }}
+                        className="text-xs text-white/50 hover:text-white underline"
+                      >
+                        Edit in Product Details ↑
+                      </button>
+                    </div>
                   </div>
                   <div className="text-xs text-white/70">
                     Price: <span className="text-brand font-medium">{form.price ? formatPrice(form.sale_price || form.price) : "Not set"}</span>
@@ -1701,7 +3320,7 @@ export default function AdminTemplateProducts() {
                     {form.stock ? ` · ${form.stock} units` : ""}
                   </div>
                   <div className="text-[11px] text-white/40">
-                    Inherits all {form.phone_models.length} selected phone model(s). Set above in Product Details.
+                    Configured in Product Details above. Inherits all {form.phone_models.length} selected phone model(s).
                   </div>
                 </div>
 
@@ -1730,6 +3349,7 @@ export default function AdminTemplateProducts() {
                       {pendingMaterials.map((mat, idx) => {
                         const ctName = caseTypes.find((c) => c.slug === mat.case_type)?.name || mat.case_type;
                         const out = Number(mat.stock) <= 0;
+                        const isDefault = stagedDefaultCaseType === mat.case_type;
                         const hasCustomModels = Array.isArray(mat.phone_models) && mat.phone_models.length > 0;
                         return (
                           <div key={idx} className="rounded-lg border border-white/10 px-3 py-2 flex items-center justify-between gap-2 bg-white/[0.02]">
@@ -1737,6 +3357,11 @@ export default function AdminTemplateProducts() {
                               <div className="flex items-center gap-2">
                                 <span className="text-sm font-medium text-white truncate">{ctName}</span>
                                 {mat.material && <span className="text-xs text-white/40">({mat.material})</span>}
+                                {isDefault && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-medium">
+                                    Default (Storefront)
+                                  </span>
+                                )}
                               </div>
                               <div className={`text-[11px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
                                 {formatPrice(mat.sale_price || mat.price)} · {out ? "Out of stock" : `${mat.stock || 0} in stock`}
@@ -1749,13 +3374,38 @@ export default function AdminTemplateProducts() {
                                 <p className="text-xs text-white/50 truncate mt-0.5">{mat.description}</p>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => removePendingMaterial(idx)}
-                              className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-500/20 hover:border-red-500/40"
-                            >
-                              Remove
-                            </button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isDefault ? (
+                                <span className="text-xs text-emerald-400 font-medium px-1.5 py-0.5 rounded bg-emerald-500/10">✓ Default</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (out) {
+                                      toast.error("Cannot set an out-of-stock material as default");
+                                      return;
+                                    }
+                                    setStagedDefaultCaseType(mat.case_type);
+                                  }}
+                                  className="text-xs text-white/60 hover:text-emerald-300 font-medium"
+                                  data-testid={`set-staged-default-btn-${idx}`}
+                                >
+                                  Set as default
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (stagedDefaultCaseType === mat.case_type) {
+                                    setStagedDefaultCaseType("");
+                                  }
+                                  removePendingMaterial(idx);
+                                }}
+                                className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-500/20 hover:border-red-500/40"
+                              >
+                                Remove
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -1869,29 +3519,75 @@ export default function AdminTemplateProducts() {
                         </label>
                       </div>
                       {materialForm.inherit_models === false && (
-                        <div className="space-y-1.5 bg-black/20 p-2.5 rounded-lg border border-white/5 max-h-36 overflow-y-auto custom-scrollbar">
-                          <div className="text-[11px] text-white/50 mb-1">Select which models support this material:</div>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                            {form.phone_models.map((mName) => {
-                              const checked = (materialForm.phone_models || []).includes(mName);
-                              return (
-                                <label key={mName} className="inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white cursor-pointer truncate">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e) => {
-                                      const next = e.target.checked
-                                        ? [...(materialForm.phone_models || []), mName]
-                                        : (materialForm.phone_models || []).filter((m) => m !== mName);
-                                      setMaterialForm((curr) => ({ ...curr, phone_models: next }));
-                                    }}
-                                    className="accent-brand rounded"
-                                  />
-                                  <span className="truncate">{mName}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
+                        <div className="space-y-2 bg-black/20 p-2.5 rounded-lg border border-white/5 max-h-48 overflow-y-auto custom-scrollbar">
+                          <div className="text-[11px] text-white/50 mb-1">Select which brands and models support this material:</div>
+                          {(form.compatibility || []).map((brandGroup) => {
+                            const bName = brandGroup.brand;
+                            const bModels = brandGroup.models || [];
+                            const selectedInBrand = (materialForm.phone_models || []).filter((m) => bModels.includes(m));
+                            const allBrandSelected = bModels.length > 0 && bModels.every((m) => (materialForm.phone_models || []).includes(m));
+
+                            const toggleAllBrand = () => {
+                              let nextModels;
+                              if (allBrandSelected) {
+                                nextModels = (materialForm.phone_models || []).filter((m) => !bModels.includes(m));
+                              } else {
+                                nextModels = [...new Set([...(materialForm.phone_models || []), ...bModels])];
+                              }
+                              const nextCompat = (form.compatibility || []).map((g) => ({
+                                brand: g.brand,
+                                models: g.models.filter((m) => nextModels.includes(m)),
+                              })).filter((g) => g.models.length > 0);
+                              setMaterialForm((curr) => ({
+                                ...curr,
+                                phone_models: nextModels,
+                                compatibility: nextCompat,
+                              }));
+                            };
+
+                            const toggleSingle = (mName) => {
+                              const nextModels = (materialForm.phone_models || []).includes(mName)
+                                ? (materialForm.phone_models || []).filter((m) => m !== mName)
+                                : [...(materialForm.phone_models || []), mName];
+                              const nextCompat = (form.compatibility || []).map((g) => ({
+                                brand: g.brand,
+                                models: g.models.filter((m) => nextModels.includes(m)),
+                              })).filter((g) => g.models.length > 0);
+                              setMaterialForm((curr) => ({
+                                ...curr,
+                                phone_models: nextModels,
+                                compatibility: nextCompat,
+                              }));
+                            };
+
+                            return (
+                              <div key={bName} className="space-y-1 pb-2 border-b border-white/5 last:border-b-0">
+                                <div className="flex items-center justify-between text-xs font-medium text-white/90">
+                                  <span>{bName} <span className="text-[10px] text-white/50">({selectedInBrand.length}/{bModels.length})</span></span>
+                                  <button
+                                    type="button"
+                                    onClick={toggleAllBrand}
+                                    className="text-[10px] text-brand hover:underline"
+                                  >
+                                    {allBrandSelected ? "Deselect all" : "Select all"}
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-0.5">
+                                  {bModels.map((mName) => (
+                                    <label key={mName} className="inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white cursor-pointer truncate">
+                                      <input
+                                        type="checkbox"
+                                        checked={(materialForm.phone_models || []).includes(mName)}
+                                        onChange={() => toggleSingle(mName)}
+                                        className="accent-brand rounded"
+                                      />
+                                      <span className="truncate">{mName}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1983,29 +3679,69 @@ export default function AdminTemplateProducts() {
                 {form.phone_models.length > 0 && (
                   <div data-testid="variant-stock-list" className="pt-2 border-t border-white/5 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-white/80">Model-specific inventory</span>
+                      <span className="text-xs font-semibold text-white/80">Model-specific pricing & stock</span>
                       <span className="text-[11px] text-white/40">
                         Total stock: {form.variant_inventory.reduce((acc, r) => acc + (Number(r.stock_quantity) || 0), 0)} units
                       </span>
                     </div>
                     <p className="text-[11px] text-white/40">
-                      Each phone model has its own stock. Setting one model to 0 or out of stock leaves the other models and this product page available.
+                      Configure independent pricing and stock per phone model. Leave price blank to inherit the material regular price (₹{form.price || "0"}).
                     </p>
-                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+                    <div className="grid grid-cols-[minmax(0,1.2fr)_5rem_5rem_4.5rem_auto] items-center gap-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                      <span>Model</span>
+                      <span className="text-center">Price (₹)</span>
+                      <span className="text-center">Sale (₹)</span>
+                      <span className="text-center">Stock</span>
+                      <span className="text-right">Out</span>
+                    </div>
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
                       {form.variant_inventory.map((row, index) => {
                         const out = isVariantOut(row);
                         return (
                           <div
                             key={row.variant_id || row.model_name}
-                            className="grid grid-cols-[minmax(0,1fr)_5rem_auto] items-center gap-3 rounded-lg border border-white/10 px-3 py-2 bg-white/[0.01]"
+                            className="grid grid-cols-[minmax(0,1.2fr)_5rem_5rem_4.5rem_auto] items-center gap-2 rounded-lg border border-white/10 px-3 py-2 bg-white/[0.01]"
                           >
                             <div className="min-w-0 overflow-hidden">
-                              <div className="text-xs font-medium text-white truncate">{row.model_name}</div>
-                              <div className={`text-[11px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
+                              <div className="flex items-center gap-1.5 truncate">
+                                {row.brand && (
+                                  <span className="text-[9px] px-1 py-0.5 rounded bg-white/10 text-white/60 shrink-0 font-medium">
+                                    {row.brand}
+                                  </span>
+                                )}
+                                <span className="text-xs font-medium text-white truncate">{row.model_name}</span>
+                              </div>
+                              <div className={`text-[10px] ${out ? "text-amber-400" : "text-emerald-400"}`}>
                                 {out ? "Out of stock" : "In stock"}
                               </div>
                             </div>
-                            <div className="min-w-0">
+                            <div>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                placeholder={form.price ? String(form.price) : "Base"}
+                                value={row.price ?? ""}
+                                onChange={(e) => updateVariantRow(index, { price: e.target.value })}
+                                className="form-field !w-full min-w-0 text-center text-xs py-1"
+                                aria-label={`Price for ${row.model_name}`}
+                                data-testid={`variant-price-${row.variant_id || index}`}
+                              />
+                            </div>
+                            <div>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                placeholder="Sale"
+                                value={row.sale_price ?? ""}
+                                onChange={(e) => updateVariantRow(index, { sale_price: e.target.value })}
+                                className="form-field !w-full min-w-0 text-center text-xs py-1"
+                                aria-label={`Sale price for ${row.model_name}`}
+                                data-testid={`variant-sale-${row.variant_id || index}`}
+                              />
+                            </div>
+                            <div>
                               <input
                                 type="number"
                                 min="0"
@@ -2019,13 +3755,12 @@ export default function AdminTemplateProducts() {
                                     is_out_of_stock: !Number.isFinite(qty) || qty <= 0,
                                   });
                                 }}
-                                className="form-field !w-full min-w-0 max-w-full text-center text-xs py-1 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                className="form-field !w-full min-w-0 text-center text-xs py-1"
                                 aria-label={`Stock for ${row.model_name}`}
                                 data-testid={`variant-stock-${row.variant_id || index}`}
                               />
                             </div>
-                            <div className="flex items-center gap-2 justify-self-end shrink-0">
-                              <span className="text-[11px] text-white/45 whitespace-nowrap">Out</span>
+                            <div className="flex items-center gap-1.5 justify-self-end shrink-0">
                               <button
                                 type="button"
                                 role="switch"
@@ -2195,10 +3930,133 @@ export default function AdminTemplateProducts() {
         </div>
       )}
 
+      {showAddBrandModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div
+            className="glass rounded-2xl w-full max-w-md p-6 border border-white/10 shadow-2xl space-y-5"
+            data-testid="add-brand-modal"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-display text-lg text-white">Add Compatible Brand</h3>
+                <p className="text-xs text-white/50 mt-0.5">
+                  Choose from catalog or create a new brand
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddBrandModal(false)}
+                className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Catalog Brands section */}
+            <div className="space-y-3">
+              <label className="text-xs font-medium text-white/70 block">
+                Select from Brand Catalog
+              </label>
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-white/40" />
+                <input
+                  type="text"
+                  placeholder="Search catalog brands…"
+                  value={brandSearchQuery}
+                  onChange={(e) => setBrandSearchQuery(e.target.value)}
+                  className="form-field pl-9 text-xs py-2"
+                  data-testid="brand-search-input"
+                />
+              </div>
+
+              <div className="max-h-48 overflow-y-auto space-y-1.5 custom-scrollbar pr-1">
+                {filteredCatalogBrands.length > 0 ? (
+                  filteredCatalogBrands.map((b) => {
+                    const isConfigured = configuredBrandKeys.has(String(b.name || "").trim().toLowerCase());
+                    return (
+                      <div
+                        key={b.id || b.name}
+                        onClick={() => {
+                          handleBrandSelect(b.name);
+                          setShowAddBrandModal(false);
+                        }}
+                        className={`flex items-center justify-between p-2.5 rounded-lg text-xs cursor-pointer transition-colors ${
+                          isConfigured
+                            ? "bg-brand/10 border border-brand/30 text-white"
+                            : "bg-white/5 hover:bg-white/10 border border-white/5 text-white/80 hover:text-white"
+                        }`}
+                        data-testid={`catalog-brand-item-${(b.name || "").toLowerCase().replace(/\s+/g, "-")}`}
+                      >
+                        <span className="font-medium">{b.name}</span>
+                        {isConfigured ? (
+                          <span className="text-[10px] text-brand bg-brand/20 px-2 py-0.5 rounded">
+                            Configured
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-white/40 hover:text-white">
+                            + Select
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-center py-4 text-xs text-white/40">
+                    No matching brands in catalog
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="border-t border-white/10 pt-4 space-y-3">
+              <label className="text-xs font-medium text-white/70 block">
+                Brand not in catalog? Add new brand
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. Motorola, Nothing..."
+                  value={newBrandInput}
+                  onChange={(e) => setNewBrandInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddNewBrand(newBrandInput);
+                    }
+                  }}
+                  className="form-field text-xs py-2 flex-1"
+                  data-testid="new-brand-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddNewBrand(newBrandInput)}
+                  disabled={creatingBrand || !newBrandInput.trim()}
+                  className="btn-primary text-xs px-3 py-2 disabled:opacity-50 whitespace-nowrap"
+                  data-testid="submit-new-brand-btn"
+                >
+                  {creatingBrand ? "Adding…" : "Add to Catalog"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddBrandModal(false)}
+                className="btn-secondary text-xs px-4 py-2"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <BrandModelManagerModal
         isOpen={showBrandModelManager}
         onClose={() => setShowBrandModelManager(false)}
-        initialBrandName={form.phone_brand}
+        initialBrandName={activeBrandName || form.phone_brand}
         onCatalogUpdated={handleCatalogUpdated}
       />
     </div>

@@ -248,7 +248,9 @@ export default function TemplateProductCard({
             </h3>
             <div className="flex items-center justify-between gap-1 sm:gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs text-white/55">
               <span className="truncate min-w-0">
-                {product.phone_brand}
+                {Array.isArray(product.compatibility) && product.compatibility.length > 1
+                  ? product.compatibility.map((c) => c.brand).join(", ")
+                  : product.phone_brand}
                 {product.phone_models?.[0] && (
                   <span className="text-white/30 hidden min-[380px]:inline"> · {product.phone_models[0]}</span>
                 )}

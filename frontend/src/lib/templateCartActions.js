@@ -1,17 +1,40 @@
 import { api } from "./api";
 import { startTemplateCheckout } from "./templateCheckout";
-import { isModelOutOfStock, productHasAvailableStock } from "../constants/templateProducts";
+import { isModelOutOfStock, productHasAvailableStock, getModelPrice } from "../constants/templateProducts";
 
 export async function resolveCatalogForTemplate(template) {
   if (!productHasAvailableStock(template)) {
     throw new Error("This product is out of stock");
   }
   const brandsRes = await api.get("/brands");
-  const brand =
-    brandsRes.data.find((b) => b.name === template.phone_brand) || brandsRes.data[0];
+  const allBrands = brandsRes.data || [];
+
+  const compat = Array.isArray(template.compatibility) && template.compatibility.length > 0
+    ? template.compatibility
+    : (template.phone_brand ? [{ brand: template.phone_brand, models: template.phone_models || [] }] : []);
+
+  let brand = null;
+  let preferred = null;
+
+  if (compat.length > 0) {
+    for (const group of compat) {
+      const match = allBrands.find(
+        (b) => b.name?.toLowerCase() === group.brand?.toLowerCase() || b.id === group.brand
+      );
+      if (match) {
+        brand = match;
+        preferred = group.models?.[0];
+        break;
+      }
+    }
+  }
+  if (!brand) {
+    brand = allBrands.find((b) => b.name === template.phone_brand) || allBrands[0];
+  }
   if (!brand) throw new Error("No brands available");
+
   const modelsRes = await api.get("/models", { params: { brand_id: brand.id } });
-  const preferred = template.phone_models?.[0];
+  if (!preferred) preferred = template.phone_models?.[0];
   if (preferred && isModelOutOfStock(template, preferred)) {
     throw new Error(`${preferred} is out of stock`);
   }
@@ -35,13 +58,20 @@ export async function resolveCatalogForTemplate(template) {
 
 export function buildCartItem(template, { brand, model, product }) {
   const designUrl = template.thumbnail || template.images?.[0];
-  const price = template.effective_price ?? template.sale_price ?? template.price;
+  const pricing = getModelPrice(template, model?.name);
+  const price = pricing.effective_price;
   return {
-    template_product: template,
+    template_product: {
+      ...template,
+      price: pricing.price,
+      sale_price: pricing.sale_price,
+      effective_price: pricing.effective_price,
+    },
     template_product_id: template.id,
     brand,
     model,
     product: { ...product, price },
+    price,
     design_url: designUrl,
     preview_url: designUrl,
     quantity: 1,
