@@ -105,15 +105,35 @@ export function matchesTemplate(p, caseType) {
   return false;
 }
 
+export function normalizeProductCompatibility(product) {
+  if (!product) return [];
+  if (Array.isArray(product.compatibility) && product.compatibility.length > 0) {
+    return product.compatibility;
+  }
+  const brand = String(product.phone_brand || "").trim();
+  const models = Array.isArray(product.phone_models) ? product.phone_models : [];
+  if (brand || models.length > 0) {
+    return [{ brand, models }];
+  }
+  return [];
+}
+
 export function isMaterialCompatibleWithModel(variant, model, parentTemplate = null) {
   if (!variant || !model) return false;
   if (variant.status && variant.status !== "published") return false;
 
-  const targetModels = Array.isArray(variant.phone_models) && variant.phone_models.length > 0
-    ? variant.phone_models
-    : (parentTemplate && !Array.isArray(parentTemplate) && Array.isArray(parentTemplate.phone_models) && parentTemplate.phone_models.length > 0
-        ? parentTemplate.phone_models
-        : null);
+  let targetModels = null;
+  if (Array.isArray(variant.phone_models) && variant.phone_models.length > 0) {
+    targetModels = variant.phone_models;
+  } else if (Array.isArray(variant.compatibility) && variant.compatibility.length > 0) {
+    targetModels = variant.compatibility.flatMap((g) => g.models || []);
+  } else if (parentTemplate && !Array.isArray(parentTemplate)) {
+    if (Array.isArray(parentTemplate.phone_models) && parentTemplate.phone_models.length > 0) {
+      targetModels = parentTemplate.phone_models;
+    } else if (Array.isArray(parentTemplate.compatibility) && parentTemplate.compatibility.length > 0) {
+      targetModels = parentTemplate.compatibility.flatMap((g) => g.models || []);
+    }
+  }
 
   if (targetModels && targetModels.length > 0) {
     const modelNameLower = String(model?.name || model || "").trim().toLowerCase();
@@ -224,35 +244,83 @@ export function listingPriceIsFrom(product) {
   return Boolean(product?.price_from) && Number(product?.material_count) > 1;
 }
 
+export function getDesignCompatibility(template) {
+  if (!template) return [];
+  const variants = Array.isArray(template?.material_variants) ? template.material_variants : [];
+  const allItems = [template, ...variants];
+  const brandMap = new Map();
+
+  for (const item of allItems) {
+    if (!item || (item.status && item.status !== "published")) continue;
+    const compats = normalizeProductCompatibility(item);
+    for (const group of compats) {
+      const bName = String(group.brand || "").trim();
+      if (!bName) continue;
+      const key = bName.toLowerCase();
+      if (!brandMap.has(key)) {
+        brandMap.set(key, { brand: bName, models: [] });
+      }
+      const entry = brandMap.get(key);
+      const models = Array.isArray(group.models) ? group.models : [];
+      for (const m of models) {
+        const mStr = String(m || "").trim();
+        if (mStr && !entry.models.some((x) => x.toLowerCase() === mStr.toLowerCase())) {
+          entry.models.push(mStr);
+        }
+      }
+    }
+  }
+
+  return Array.from(brandMap.values());
+}
+
 export function productFromMaterial(template, variant) {
   if (!template) return null;
   if (!variant || variant.id === template.id) {
+    const defaultCompat = Array.isArray(template.compatibility) && template.compatibility.length > 0
+      ? template.compatibility
+      : normalizeProductCompatibility(template);
     return {
       ...template,
       title: variant?.title || template.title,
       effective_price: variant?.effective_price ?? template.effective_price ?? template.sale_price ?? template.price,
+      compatibility: defaultCompat,
       variants: variant?.variants || template.variants,
       variant_inventory: variant?.variants || template.variant_inventory,
     };
   }
+
+  const effective = variant.effective_price ?? variant.sale_price ?? variant.price;
+  const variantCompat = Array.isArray(variant.compatibility) && variant.compatibility.length > 0
+    ? variant.compatibility
+    : (variant.phone_brand ? [{ brand: variant.phone_brand, models: variant.phone_models || [] }] : template.compatibility);
+  const variantModels = Array.isArray(variant.phone_models) && variant.phone_models.length > 0
+    ? variant.phone_models
+    : template.phone_models;
+
   return {
     ...template,
     id: variant.id,
     title: variant.title || template.title,
     slug: variant.slug,
     case_type: variant.case_type,
+    case_type_label: variant.case_type_label || template.case_type_label,
     material: variant.material,
     price: variant.price,
     sale_price: variant.sale_price,
-    effective_price: variant.effective_price,
-    discount_percent: variant.discount_percent,
+    effective_price: effective,
+    discount_percent: variant.discount_percent ?? (variant.sale_price && variant.price > variant.sale_price ? Math.round((1 - variant.sale_price / variant.price) * 100) : 0),
     description: variant.description,
     short_description: variant.short_description,
     sku: variant.sku,
     stock: variant.stock,
     in_stock: variant.in_stock,
-    variants: variant.variants,
-    variant_inventory: variant.variants,
+    phone_brand: variant.phone_brand || template.phone_brand,
+    phone_models: variantModels,
+    compatibility: variantCompat,
+    status: variant.status || template.status,
+    variants: variant.variants || template.variants,
+    variant_inventory: variant.variants || template.variant_inventory,
     thumbnail: variant.has_variant_image && variant.thumbnail ? variant.thumbnail : template.thumbnail,
     images: variant.has_variant_image && variant.images?.length ? variant.images : template.images,
   };
@@ -433,34 +501,71 @@ export function maxPurchasableQuantity(product, modelName) {
 }
 
 export function materialLabel(item) {
-  return item?.product?.name
+  return item?.template_product?.case_type_label
     || item?.template_product?.material
-    || caseTypeLabel(item?.template_product?.case_type || item?.case_type)
+    || caseTypeLabel(item?.template_product?.case_type)
+    || item?.product?.name
+    || caseTypeLabel(item?.case_type)
     || "";
 }
 
-export function syncVariantRows(modelNames, currentRows, fallbackStock = 0) {
+export function getModelPrice(materialOrTemplate, modelName) {
+  if (!materialOrTemplate) return { price: 0, sale_price: null, effective_price: 0 };
+  const basePrice = Number(materialOrTemplate.price) || 0;
+  const baseSale = (materialOrTemplate.sale_price != null && materialOrTemplate.sale_price !== "")
+    ? Number(materialOrTemplate.sale_price)
+    : null;
+  const variants = listVariants(materialOrTemplate);
+  if (modelName && variants.length > 0) {
+    const matched = variants.find(
+      (v) => String(v.model_name || "").trim().toLowerCase() === String(modelName).trim().toLowerCase()
+    );
+    if (matched && matched.price != null && matched.price !== "" && Number(matched.price) > 0) {
+      const price = Number(matched.price);
+      const sale_price = (matched.sale_price != null && matched.sale_price !== "" && Number(matched.sale_price) > 0)
+        ? Number(matched.sale_price)
+        : null;
+      const effective_price = (sale_price != null && sale_price > 0 && sale_price < price)
+        ? sale_price
+        : price;
+      return { price, sale_price: sale_price && sale_price < price ? sale_price : null, effective_price };
+    }
+  }
+  const effective_price = (baseSale != null && baseSale > 0 && baseSale < basePrice)
+    ? baseSale
+    : (materialOrTemplate.effective_price ?? basePrice);
+  return { price: basePrice, sale_price: baseSale && baseSale < basePrice ? baseSale : null, effective_price };
+}
+
+export function syncVariantRows(modelNames, currentRows, fallbackStock = 0, fallbackPrice = "", fallbackSalePrice = "", brandMap = {}) {
   const rows = Array.isArray(currentRows) ? currentRows : [];
   return (modelNames || []).map((modelName) => {
     const model_name = String(modelName).trim();
     const existing = rows.find(
       (row) => String(row.model_name || "").trim().toLowerCase() === model_name.toLowerCase()
     );
+    const brand = (brandMap && brandMap[model_name]) || existing?.brand || null;
     if (existing) {
       const stock_quantity = existing.stock_quantity ?? 0;
       return {
         variant_id: existing.variant_id,
         model_name,
+        brand,
         stock_quantity: String(stock_quantity),
         is_out_of_stock: existing.is_out_of_stock === true || Number(stock_quantity) <= 0,
+        price: existing.price != null && existing.price !== "" ? String(existing.price) : "",
+        sale_price: existing.sale_price != null && existing.sale_price !== "" ? String(existing.sale_price) : "",
       };
     }
     const seed = rows.length ? rows[rows.length - 1].stock_quantity : fallbackStock;
     const qty = Math.max(0, Math.floor(Number(seed) || 0));
     return {
       model_name,
+      brand,
       stock_quantity: String(qty),
       is_out_of_stock: qty <= 0,
+      price: fallbackPrice ? String(fallbackPrice) : "",
+      sale_price: fallbackSalePrice ? String(fallbackSalePrice) : "",
     };
   });
 }

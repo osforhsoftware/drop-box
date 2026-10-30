@@ -45,6 +45,26 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8000",
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("error", (_err, _req, res) => {
+            if (res && !res.headersSent && typeof res.writeHead === "function") {
+              res.writeHead(503, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ detail: "Backend server unavailable on port 8000" }));
+            }
+          });
+        },
+      },
+      "/uploads": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("error", (_err, _req, res) => {
+            if (res && !res.headersSent && typeof res.writeHead === "function") {
+              res.writeHead(503, { "Content-Type": "text/plain" });
+              res.end("Backend server unavailable");
+            }
+          });
+        },
       },
     },
   },

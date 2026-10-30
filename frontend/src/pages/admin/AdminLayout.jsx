@@ -24,14 +24,26 @@ const CATALOG_LINKS = [
 ];
 
 export default function AdminLayout() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, authError, refreshUser, logout } = useAuth();
   const location = useLocation();
   const catalogActive =
     location.pathname.startsWith("/admin/catalog")
     || location.pathname.startsWith("/admin/template-products");
 
   if (loading) return <div className="p-10 text-white/60">Loading…</div>;
-  if (!user || user.role !== "admin") return <Navigate to="/" replace />;
+  if (authError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#111] p-6">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center">
+          <h1 className="text-xl font-semibold text-white">Admin connection unavailable</h1>
+          <p className="mt-3 text-sm text-white/60">The server could not verify your session. Your saved sign-in has been kept. Check that the backend is running, then retry.</p>
+          <button type="button" onClick={refreshUser} className="mt-6 rounded-full bg-brand px-6 py-3 font-semibold text-black">Retry connection</button>
+        </div>
+      </div>
+    );
+  }
+  if (user && user.role !== "admin") return <Navigate to="/" replace />;
+  if (!user) return <Navigate to="/casebox-login" state={{ from: location }} replace />;
 
   return (
     <div className="min-h-screen flex">
@@ -94,3 +106,4 @@ export default function AdminLayout() {
     </div>
   );
 }
+

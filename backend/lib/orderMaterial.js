@@ -41,6 +41,7 @@ function snapshotOrderMaterial(line, labelMap = {}) {
 
   const case_type_label = String(
     line?.case_type_label ||
+    template.case_type_label ||
     (!isGenericProduct && product.name ? product.name : null) ||
     caseTypeLabelFromMap(case_type, labelMap) ||
     product.name ||

@@ -67,7 +67,11 @@ export default function TemplateQuickView({ item, onClose, onBuyNow, adminPrevie
           <div className="mt-4 space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-white/50">Brand</span>
-              <span>{item.phone_brand}</span>
+              <span>
+                {Array.isArray(item.compatibility) && item.compatibility.length > 1
+                  ? item.compatibility.map((c) => c.brand).join(", ")
+                  : item.phone_brand}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-white/50">Case type</span>

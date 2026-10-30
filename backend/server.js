@@ -1,6 +1,12 @@
-require("dotenv").config();
-
 const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, ".env") });
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[process] Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[process] Uncaught Exception thrown:", error);
+});
 const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
@@ -46,6 +52,7 @@ const {
 const {
   slugify,
   parseFormFields,
+  normalizeCompatibility,
   buildListFilter,
   buildAdminListFilter,
   buildSort,
@@ -78,6 +85,8 @@ const {
   consumeVariantStock,
   synthesizeVariantInventory,
   availableStock,
+  normalizeVariantInventory,
+  resolveModelPrice,
 } = require("./lib/variantInventory");
 const {
   groupProductsForListing,
@@ -85,6 +94,7 @@ const {
   toPublicMaterialVariant,
   paginateList,
   findDuplicateCaseType,
+  caseTypeKey,
 } = require("./lib/designGroup");
 const {
   buildCaseTypeLabelMap,
@@ -450,47 +460,64 @@ async function resolveCatalogLine(line) {
       throw err;
     }
 
-    // 1. Validate brand compatibility
-    if (templateProduct.phone_brand && brand.name) {
-      if (templateProduct.phone_brand.trim().toLowerCase() !== brand.name.trim().toLowerCase()) {
+    // 1. Validate brand and model compatibility
+    const compat = Array.isArray(templateProduct.compatibility) && templateProduct.compatibility.length > 0
+      ? templateProduct.compatibility
+      : (templateProduct.phone_brand ? [{ brand: templateProduct.phone_brand, models: templateProduct.phone_models || [] }] : []);
+
+    if (compat.length > 0 && brand.name) {
+      const brandMatch = compat.find(
+        (g) => g.brand && g.brand.trim().toLowerCase() === brand.name.trim().toLowerCase()
+      );
+      if (!brandMatch) {
         const err = new Error(`${templateProduct.title} is not available for ${brand.name}`);
         err.status = 400;
         throw err;
       }
-    }
 
-    // 2. Validate model compatibility
-    if (Array.isArray(templateProduct.phone_models) && templateProduct.phone_models.length > 0) {
-      const isCompat = templateProduct.phone_models.some((m) => {
-        const s = String(m).trim().toLowerCase();
-        return s === String(model.name).trim().toLowerCase() || s === String(model.id).trim().toLowerCase();
-      });
-      if (!isCompat) {
-        const err = new Error(`${templateProduct.title} is not available for ${model.name}`);
-        err.status = 400;
-        throw err;
+      // 2. Validate model compatibility for the matched brand
+      if (Array.isArray(brandMatch.models) && brandMatch.models.length > 0 && model.name) {
+        const isCompat = brandMatch.models.some((m) => {
+          const s = String(m).trim().toLowerCase();
+          return s === String(model.name).trim().toLowerCase() || s === String(model.id).trim().toLowerCase();
+        });
+        if (!isCompat) {
+          const err = new Error(`${templateProduct.title} is not available for ${model.name}`);
+          err.status = 400;
+          throw err;
+        }
       }
     }
 
     const pSlug = String(product.slug || "").trim().toLowerCase();
     const tCase = String(templateProduct.case_type || "").trim().toLowerCase();
-    const isDirectMatch = tCase === pSlug || Boolean(CASE_TYPE_ALIASES[tCase]?.includes(pSlug));
+    let isDirectMatch = tCase === pSlug || Boolean(CASE_TYPE_ALIASES[tCase]?.includes(pSlug));
 
-    // If design has a sibling template product matching the chosen case material, resolve to that sibling
-    if (!isDirectMatch && templateProduct.design_id) {
-      const sibling = await db.collection("template_products").findOne(
-        publishedShopClause({
-          design_id: templateProduct.design_id,
-          ...caseTypeFilterClause(pSlug),
-        })
-      );
-      if (sibling) {
-        templateProduct = sibling;
+    // If the passed product blank does not match the chosen template product case type,
+    // align product to the chosen template product rather than silently substituting templateProduct
+    if (!isDirectMatch) {
+      const matchingProduct = await db.collection("products").findOne(caseTypeFilterClause(tCase));
+      if (matchingProduct) {
+        product = matchingProduct;
+        isDirectMatch = true;
+      } else if (!line.template_product_id && templateProduct.design_id) {
+        // Fallback only when template_product_id was not explicitly specified: resolve to sibling
+        const sibling = await db.collection("template_products").findOne(
+          publishedShopClause({
+            design_id: templateProduct.design_id,
+            ...caseTypeFilterClause(pSlug),
+          })
+        );
+        if (sibling) {
+          templateProduct = sibling;
+          isDirectMatch = true;
+        }
       }
     }
 
     const currentCase = String(templateProduct.case_type || "").trim().toLowerCase();
-    const isDefaultMaterial = currentCase === pSlug || Boolean(CASE_TYPE_ALIASES[currentCase]?.includes(pSlug));
+    const finalProductSlug = String(product.slug || "").trim().toLowerCase();
+    const isDefaultMaterial = currentCase === finalProductSlug || Boolean(CASE_TYPE_ALIASES[currentCase]?.includes(finalProductSlug));
 
     // 3. Validate material compatibility
     if (!isDefaultMaterial) {
@@ -506,7 +533,8 @@ async function resolveCatalogLine(line) {
       throw err;
     }
 
-    price = effectivePrice(templateProduct);
+    const modelPricing = resolveModelPrice(templateProduct, model.name);
+    price = modelPricing.effective_price;
   }
 
   return { brand, model, product, relation, templateProduct, price };
@@ -1125,10 +1153,17 @@ async function ensureDesignId(product) {
 
 function adminProductPayload(doc) {
   if (!doc) return doc;
+  const compatibility = normalizeCompatibility(doc.compatibility, doc.phone_brand, doc.phone_models);
+  const allModels = Array.isArray(doc.phone_models) && doc.phone_models.length > 0
+    ? doc.phone_models
+    : [...new Set(compatibility.flatMap((g) => g.models || []))];
   return {
     ...doc,
     title: displayTemplateTitle(doc.title),
-    variants: resolveVariantInventory(doc),
+    compatibility,
+    phone_brand: doc.phone_brand || compatibility[0]?.brand || "",
+    phone_models: allModels,
+    variants: resolveVariantInventory({ ...doc, phone_models: allModels }),
   };
 }
 
@@ -2699,49 +2734,84 @@ api.get("/shop/templates", async (req, res) => {
 });
 
 api.get("/shop/templates/:slug", async (req, res) => {
-  const item = await db.collection("template_products").findOne(
-    publishedShopClause({ slug: req.params.slug }),
-    { projection: { _id: 0 } }
-  );
-  if (!item) return res.status(404).json({ detail: "Template not found" });
+  try {
+    const slug = String(req.params.slug || "").trim();
+    if (!slug) return res.status(404).json({ detail: "Template not found" });
 
-  const [siblings, labelMap, relatedDocs] = await Promise.all([
-    loadDesignSiblings(item, { publishedOnly: true }),
-    loadCaseTypeLabelMap(),
-    db.collection("template_products")
-      .find({
-        $and: [
-          publishedShopClause({ id: { $ne: item.id } }),
-          item.design_id ? { $nor: [{ design_id: item.design_id }] } : {},
-          {
-            $or: [
-              { category: item.category },
-              { collection: item.collection },
-              { phone_brand: item.phone_brand },
-            ],
-          },
-        ],
-      }, { projection: { _id: 0 } })
-      .sort({ created_at: -1 })
-      .limit(24)
-      .toArray(),
-  ]);
+    const item = await db.collection("template_products").findOne(
+      publishedShopClause({ slug }),
+      { projection: { _id: 0 } }
+    );
+    if (!item) return res.status(404).json({ detail: "Template not found" });
 
-  const related = groupProductsForListing(relatedDocs)
-    .map((group) => toPublicListingProduct(group, labelMap))
-    .filter(Boolean)
-    .slice(0, 8);
+    const [siblings, labelMap, relatedDocs] = await Promise.all([
+      loadDesignSiblings(item, { publishedOnly: true }),
+      loadCaseTypeLabelMap(),
+      db.collection("template_products")
+        .find({
+          $and: [
+            publishedShopClause({ id: { $ne: item.id } }),
+            item.design_id ? { $nor: [{ design_id: item.design_id }] } : {},
+            {
+              $or: [
+                { category: item.category },
+                { collection: item.collection },
+                { phone_brand: item.phone_brand },
+              ],
+            },
+          ],
+        }, { projection: { _id: 0 } })
+        .sort({ created_at: -1 })
+        .limit(24)
+        .toArray(),
+    ]);
 
-  const publicItem = toPublicProduct(item);
-  res.set("Cache-Control", "no-store");
-  res.json({
-    ...publicItem,
-    design_id: item.design_id || null,
-    material_variants: siblings
-      .map((sibling) => toPublicMaterialVariant(sibling, item, labelMap))
-      .filter(Boolean),
-    related,
-  });
+    const related = groupProductsForListing(relatedDocs)
+      .map((group) => toPublicListingProduct(group, labelMap))
+      .filter(Boolean)
+      .slice(0, 8);
+
+    const publicItem = toPublicProduct(item);
+
+    // Aggregate design compatibility across all siblings
+    const brandGroupMap = new Map();
+    for (const s of siblings) {
+      const sCompat = Array.isArray(s.compatibility) && s.compatibility.length > 0
+        ? s.compatibility
+        : normalizeCompatibility(s.compatibility, s.phone_brand, s.phone_models);
+      for (const g of sCompat) {
+        const bKey = String(g.brand || "").trim().toLowerCase();
+        if (!bKey) continue;
+        if (!brandGroupMap.has(bKey)) {
+          brandGroupMap.set(bKey, { brand: g.brand, models: [] });
+        }
+        const entry = brandGroupMap.get(bKey);
+        for (const m of g.models || []) {
+          if (!entry.models.some((x) => x.toLowerCase() === String(m).toLowerCase())) {
+            entry.models.push(m);
+          }
+        }
+      }
+    }
+    const designCompatibility = Array.from(brandGroupMap.values());
+    const designModels = [...new Set(designCompatibility.flatMap((g) => g.models))];
+
+    res.set("Cache-Control", "no-store");
+    res.json({
+      ...publicItem,
+      compatibility: designCompatibility.length > 0 ? designCompatibility : publicItem.compatibility,
+      phone_models: designModels.length > 0 ? designModels : publicItem.phone_models,
+      phone_brand: designCompatibility[0]?.brand || publicItem.phone_brand,
+      design_id: item.design_id || null,
+      material_variants: siblings
+        .map((sibling) => toPublicMaterialVariant(sibling, item, labelMap))
+        .filter(Boolean),
+      related,
+    });
+  } catch (err) {
+    console.error("Error fetching template by slug:", err);
+    return res.status(500).json({ detail: "Failed to load template" });
+  }
 });
 
 api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
@@ -2790,126 +2860,625 @@ async function loadAllowedCaseTypeSlugs() {
 }
 
 api.post("/admin/template-products", getCurrentAdmin, handleTemplateProductUpload, async (req, res) => {
-  const allowedCaseTypes = await loadAllowedCaseTypeSlugs();
+  try {
+    const allowedCaseTypes = await loadAllowedCaseTypeSlugs();
 
-  const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
-  const brandName = String(req.body?.phone_brand || "").trim();
-  const matchedBrand = brandDocs.find(
-    (b) => b.name?.toLowerCase() === brandName.toLowerCase() || b.id === brandName
-  );
-  let modelDocs = [];
-  if (matchedBrand) {
-    modelDocs = await db.collection("models").find({ brand_id: matchedBrand.id }, { projection: { id: 1, name: 1 } }).toArray();
+    const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
+    const modelDocs = await db.collection("models").find({}, { projection: { id: 1, name: 1, brand_id: 1 } }).toArray();
+
+    const parsed = parseFormFields(req.body || {}, {
+      allowedCaseTypes,
+      allowedBrands: brandDocs,
+      allowedModels: modelDocs,
+    });
+    if (parsed.error) return res.status(400).json({ detail: parsed.error });
+
+    const uploaded = collectUploadedTemplateImages(req);
+    if (!uploaded.length) {
+      return res.status(400).json({ detail: "Thumbnail or gallery image is required" });
+    }
+
+    const slug = await ensureUniqueTemplateSlug(parsed.slug);
+    const ts = nowIso();
+    const item = {
+      id: crypto.randomUUID(),
+      ...parsed,
+      slug,
+      thumbnail: uploaded[0],
+      images: uploaded,
+      is_default: parsed.is_default !== undefined ? Boolean(parsed.is_default) : true,
+      order_count: 0,
+      created_at: ts,
+      updated_at: ts,
+    };
+    await db.collection("template_products").insertOne(item);
+    res.json(item);
+  } catch (err) {
+    console.error("Error creating template product:", err);
+    return res.status(500).json({ detail: err.message || "Failed to create template product" });
   }
-
-  const parsed = parseFormFields(req.body || {}, {
-    allowedCaseTypes,
-    allowedBrands: brandDocs,
-    allowedModels: modelDocs,
-  });
-  if (parsed.error) return res.status(400).json({ detail: parsed.error });
-
-  const uploaded = collectUploadedTemplateImages(req);
-  if (!uploaded.length) {
-    return res.status(400).json({ detail: "Thumbnail or gallery image is required" });
-  }
-
-  const slug = await ensureUniqueTemplateSlug(parsed.slug);
-  const ts = nowIso();
-  const item = {
-    id: crypto.randomUUID(),
-    ...parsed,
-    slug,
-    thumbnail: uploaded[0],
-    images: uploaded,
-    order_count: 0,
-    created_at: ts,
-    updated_at: ts,
-  };
-  await db.collection("template_products").insertOne(item);
-  res.json(item);
 });
 
 api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProductUpload, async (req, res) => {
-  const existing = await db.collection("template_products").findOne({ id: req.params.id });
-  if (!existing) return res.status(404).json({ detail: "Template product not found" });
-  if (isTrashed(existing)) {
-    return res.status(400).json({ detail: "Restore the product from trash before editing" });
-  }
-
-  const baseAllowed = await loadAllowedCaseTypeSlugs();
-  const allowedCaseTypes = [
-    ...new Set([
-      ...baseAllowed,
-      String(existing.case_type || "").toLowerCase(),
-    ].filter(Boolean)),
-  ];
-
-  const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
-  const brandName = String(req.body?.phone_brand || existing.phone_brand || "").trim();
-  const matchedBrand = brandDocs.find(
-    (b) => b.name?.toLowerCase() === brandName.toLowerCase() || b.id === brandName
-  );
-  let modelDocs = [];
-  if (matchedBrand) {
-    modelDocs = await db.collection("models").find({ brand_id: matchedBrand.id }, { projection: { id: 1, name: 1 } }).toArray();
-  }
-
-  const parsed = parseFormFields(req.body || {}, {
-    allowedCaseTypes,
-    allowedBrands: brandDocs,
-    allowedModels: modelDocs,
-  });
-  if (parsed.error) return res.status(400).json({ detail: parsed.error });
-
-  const slug = await ensureUniqueTemplateSlug(
-    parsed.slug || existing.slug,
-    existing.id
-  );
-
-  const uploaded = collectUploadedTemplateImages(req);
-  let images = existing.images || [];
-  let thumbnail = existing.thumbnail;
-
-  if (uploaded.length) {
-    if (req.files?.thumbnail?.[0]) {
-      await releaseTemplateProductImageFile(existing.thumbnail, existing.id);
-      thumbnail = uploaded[0];
-      images = [thumbnail, ...images.filter((u) => u !== existing.thumbnail), ...uploaded.slice(1)];
-    } else {
-      images = [...images, ...uploaded];
+  try {
+    const existing = await db.collection("template_products").findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ detail: "Template product not found" });
+    if (isTrashed(existing)) {
+      return res.status(400).json({ detail: "Restore the product from trash before editing" });
     }
-  }
 
-  if (req.body.remove_images) {
-    try {
-      const toRemove = JSON.parse(req.body.remove_images);
-      if (Array.isArray(toRemove)) {
-        for (const url of toRemove) {
-          await releaseTemplateProductImageFile(url, existing.id);
-        }
-        images = images.filter((u) => !toRemove.includes(u));
-        if (!images.includes(thumbnail)) thumbnail = images[0] || null;
+    const baseAllowed = await loadAllowedCaseTypeSlugs();
+    const allowedCaseTypes = [
+      ...new Set([
+        ...baseAllowed,
+        String(existing.case_type || "").toLowerCase(),
+      ].filter(Boolean)),
+    ];
+
+    const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
+    const modelDocs = await db.collection("models").find({}, { projection: { id: 1, name: 1, brand_id: 1 } }).toArray();
+
+    const parsed = parseFormFields(req.body || {}, {
+      allowedCaseTypes,
+      allowedBrands: brandDocs,
+      allowedModels: modelDocs,
+    });
+    if (parsed.error) return res.status(400).json({ detail: parsed.error });
+
+    const slug = await ensureUniqueTemplateSlug(
+      parsed.slug || existing.slug,
+      existing.id
+    );
+
+    const uploaded = collectUploadedTemplateImages(req);
+    let images = existing.images || [];
+    let thumbnail = existing.thumbnail;
+
+    if (uploaded.length) {
+      if (req.files?.thumbnail?.[0]) {
+        await releaseTemplateProductImageFile(existing.thumbnail, existing.id);
+        thumbnail = uploaded[0];
+        images = [thumbnail, ...images.filter((u) => u !== existing.thumbnail), ...uploaded.slice(1)];
+      } else {
+        images = [...images, ...uploaded];
       }
-    } catch {
-      /* ignore */
     }
+
+    if (req.body.remove_images) {
+      try {
+        const toRemove = JSON.parse(req.body.remove_images);
+        if (Array.isArray(toRemove)) {
+          for (const url of toRemove) {
+            await releaseTemplateProductImageFile(url, existing.id);
+          }
+          images = images.filter((u) => !toRemove.includes(u));
+          if (!images.includes(thumbnail)) thumbnail = images[0] || null;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const submittedVariants = parsed.material_variants;
+    const update = {
+      ...parsed,
+      slug,
+      thumbnail,
+      images,
+      updated_at: nowIso(),
+    };
+    if (parsed.is_default !== undefined) {
+      update.is_default = Boolean(parsed.is_default);
+    } else if (existing.is_default !== undefined) {
+      update.is_default = Boolean(existing.is_default);
+    }
+    delete update.material_variants;
+
+    const designId = await ensureDesignId(existing);
+    update.design_id = designId;
+
+    await db.collection("template_products").updateOne({ id: existing.id }, { $set: update });
+
+    const existingSiblings = await loadDesignSiblings({ ...existing, design_id: designId });
+
+    if (Array.isArray(submittedVariants)) {
+      // 1. Sync existing siblings
+      for (const sibling of existingSiblings) {
+        if (sibling.id === existing.id) continue;
+
+        const matched = submittedVariants.find(
+          (v) => (v.id && v.id === sibling.id) || caseTypeKey(v.case_type) === caseTypeKey(sibling.case_type)
+        );
+
+        if (matched) {
+          let sibCompat = null;
+          if (Array.isArray(matched.compatibility) && matched.compatibility.length > 0) {
+            sibCompat = matched.compatibility;
+          } else if (Array.isArray(matched.phone_models) && matched.phone_models.length > 0) {
+            sibCompat = (parsed.compatibility || []).map((g) => ({
+              brand: g.brand,
+              models: (g.models || []).filter((m) => matched.phone_models.includes(m)),
+            })).filter((g) => g.models.length > 0);
+          } else if (Array.isArray(sibling.compatibility) && sibling.compatibility.length > 0) {
+            sibCompat = sibling.compatibility;
+          } else {
+            sibCompat = parsed.compatibility || [];
+          }
+
+          const sibModels = [...new Set((sibCompat || []).flatMap((g) => g.models || []))];
+
+          const sibUpdate = {
+            price: matched.price,
+            sale_price: matched.sale_price ?? null,
+            stock: matched.stock != null ? matched.stock : sibling.stock,
+            sku: matched.sku !== undefined ? matched.sku : sibling.sku,
+            description: matched.description !== undefined ? matched.description : sibling.description,
+            status: matched.status || sibling.status || "published",
+            material: matched.material || sibling.material || "",
+            case_type: matched.case_type || sibling.case_type,
+            compatibility: sibCompat,
+            phone_models: sibModels,
+            phone_brand: sibCompat[0]?.brand || sibling.phone_brand,
+            thumbnail: matched.thumbnail || sibling.thumbnail || thumbnail,
+            images: Array.isArray(matched.images) && matched.images.length > 0 ? matched.images : (sibling.images || images),
+            design_id: designId,
+            is_default: matched.is_default !== undefined ? Boolean(matched.is_default) : Boolean(sibling.is_default),
+            updated_at: nowIso(),
+          };
+          if (Array.isArray(matched.variant_inventory) && matched.variant_inventory.length > 0) {
+            const norm = normalizeVariantInventory(matched.variant_inventory, sibModels, sibUpdate.stock);
+            if (norm.value) {
+              sibUpdate.variant_inventory = norm.value;
+              sibUpdate.stock = availableStock(norm.value);
+            }
+          }
+          await db.collection("template_products").updateOne({ id: sibling.id }, { $set: sibUpdate });
+        } else {
+          // Intentionally removed from design
+          await db.collection("template_products").updateOne(
+            { id: sibling.id },
+            { $unset: { design_id: "" }, $set: { updated_at: nowIso() } }
+          );
+        }
+      }
+
+      // 2. Create newly added variants
+      for (const newVar of submittedVariants) {
+        if (caseTypeKey(newVar.case_type) === caseTypeKey(parsed.case_type)) continue;
+        const alreadyExists = existingSiblings.some(
+          (s) => (newVar.id && s.id === newVar.id) || caseTypeKey(s.case_type) === caseTypeKey(newVar.case_type)
+        );
+        if (!alreadyExists) {
+          let varCompat = null;
+          if (Array.isArray(newVar.compatibility) && newVar.compatibility.length > 0) {
+            varCompat = newVar.compatibility;
+          } else if (Array.isArray(newVar.phone_models) && newVar.phone_models.length > 0) {
+            varCompat = (parsed.compatibility || []).map((g) => ({
+              brand: g.brand,
+              models: (g.models || []).filter((m) => newVar.phone_models.includes(m)),
+            })).filter((g) => g.models.length > 0);
+          } else {
+            varCompat = parsed.compatibility || [];
+          }
+          const varModels = [...new Set((varCompat || []).flatMap((g) => g.models || []))];
+
+          const varSlug = await ensureUniqueTemplateSlug(`${slug}-${newVar.case_type}`);
+          let varInventory = [];
+          if (Array.isArray(newVar.variant_inventory) && newVar.variant_inventory.length > 0) {
+            const norm = normalizeVariantInventory(newVar.variant_inventory, varModels, newVar.stock ?? 0);
+            if (norm.value) varInventory = norm.value;
+          } else {
+            varInventory = synthesizeVariantInventory(varModels, newVar.stock ?? 0);
+          }
+          const varStock = varInventory.length ? availableStock(varInventory) : (newVar.stock ?? 0);
+          const varItem = {
+            id: `tpl-${slugify(parsed.title)}-${newVar.case_type}-${Date.now().toString(36)}`,
+            title: parsed.title,
+            slug: varSlug,
+            product_type: parsed.product_type,
+            description: newVar.description || parsed.description,
+            short_description: parsed.short_description,
+            phone_brand: varCompat[0]?.brand || parsed.phone_brand,
+            phone_models: varModels,
+            compatibility: varCompat,
+            category: parsed.category,
+            collection: parsed.collection,
+            case_type: newVar.case_type,
+            material: newVar.material || "",
+            price: newVar.price,
+            sale_price: newVar.sale_price ?? null,
+            stock: varStock,
+            variant_inventory: varInventory,
+            sku: newVar.sku || null,
+            tags: parsed.tags || [],
+            status: newVar.status || "published",
+            rating: parsed.rating,
+            review_count: 0,
+            thumbnail: newVar.thumbnail || thumbnail,
+            images: Array.isArray(newVar.images) && newVar.images.length > 0 ? newVar.images : images,
+            design_id: designId,
+            is_default: Boolean(newVar.is_default),
+            order_count: 0,
+            created_at: nowIso(),
+            updated_at: nowIso(),
+          };
+          await db.collection("template_products").insertOne(varItem);
+        }
+      }
+    } else {
+      // If material_variants was NOT submitted, sync updated compatibility to siblings that inherit design models
+      for (const sibling of existingSiblings) {
+        if (sibling.id === existing.id) continue;
+        const isRestricted = Array.isArray(sibling.phone_models) && sibling.phone_models.length > 0 &&
+          !sibling.phone_models.every((m) => parsed.phone_models.includes(m));
+        if (!isRestricted) {
+          await db.collection("template_products").updateOne(
+            { id: sibling.id },
+            {
+              $set: {
+                compatibility: parsed.compatibility,
+                phone_brand: parsed.phone_brand,
+                phone_models: parsed.phone_models,
+                updated_at: nowIso(),
+              },
+            }
+          );
+        }
+      }
+    }
+
+    const saved = await db.collection("template_products").findOne(
+      { id: existing.id },
+      { projection: { _id: 0 } }
+    );
+    const siblingsAfter = await loadDesignSiblings(saved);
+    res.json({
+      ...adminProductPayload(saved),
+      material_variants: siblingsAfter.map(adminProductPayload),
+      items: siblingsAfter.map(adminProductPayload),
+    });
+  } catch (err) {
+    console.error("Error updating template product:", err);
+    return res.status(500).json({ detail: err.message || "Failed to update template product" });
   }
+});
 
-  const update = {
-    ...parsed,
-    slug,
-    thumbnail,
-    images,
-    updated_at: nowIso(),
-  };
+api.get("/admin/template-products/:id", getCurrentAdmin, async (req, res) => {
+  try {
+    const item = await db.collection("template_products").findOne({ id: req.params.id }, { projection: { _id: 0 } });
+    if (!item) return res.status(404).json({ detail: "Template product not found" });
+    const siblings = await loadDesignSiblings(item);
+    const payload = adminProductPayload(item);
+    res.json({
+      ...payload,
+      material_variants: siblings.map(adminProductPayload),
+      items: siblings.map(adminProductPayload),
+    });
+  } catch (err) {
+    console.error("Error fetching template product:", err);
+    return res.status(500).json({ detail: err.message || "Failed to fetch template product" });
+  }
+});
 
-  await db.collection("template_products").updateOne({ id: existing.id }, { $set: update });
-  const saved = await db.collection("template_products").findOne(
-    { id: existing.id },
-    { projection: { _id: 0 } }
-  );
-  res.json({ ...saved, variants: resolveVariantInventory(saved) });
+api.patch("/admin/template-products/:id/brand-groups/:brand", getCurrentAdmin, async (req, res) => {
+  try {
+    const existing = await db.collection("template_products").findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ detail: "Template product not found" });
+    if (isTrashed(existing)) {
+      return res.status(400).json({ detail: "Restore the product from trash before editing" });
+    }
+
+    const targetBrand = String(req.params.brand || "").trim();
+    const action = String(req.body?.action || "update").toLowerCase();
+
+    const brandDocs = await db.collection("brands").find({}, { projection: { id: 1, name: 1, slug: 1 } }).toArray();
+    const modelDocs = await db.collection("models").find({}, { projection: { id: 1, name: 1, brand_id: 1 } }).toArray();
+
+    const existingCompat = Array.isArray(existing.compatibility) && existing.compatibility.length > 0
+      ? existing.compatibility
+      : normalizeCompatibility(existing.compatibility, existing.phone_brand, existing.phone_models);
+
+    let updatedCompat = [];
+    if (action === "remove") {
+      updatedCompat = existingCompat.filter(
+        (g) => g.brand.toLowerCase() !== targetBrand.toLowerCase()
+      );
+    } else {
+      const rawModels = Array.isArray(req.body?.models) ? req.body.models : [];
+      const parsedModels = parsePhoneModels(rawModels);
+
+      const matchedBrand = brandDocs.find(
+        (b) => b.name.toLowerCase() === targetBrand.toLowerCase() || b.id === targetBrand
+      );
+      if (!matchedBrand) {
+        return res.status(400).json({ detail: `Brand "${targetBrand}" is not in the catalog` });
+      }
+
+      const brandCatalogModels = modelDocs.filter((m) => m.brand_id === matchedBrand.id);
+      const validModelNames = new Set(brandCatalogModels.map((m) => m.name.toLowerCase()));
+
+      for (const m of parsedModels) {
+        if (!validModelNames.has(m.toLowerCase())) {
+          return res.status(400).json({ detail: `Model "${m}" is not a valid model for ${matchedBrand.name}` });
+        }
+      }
+
+      let found = false;
+      updatedCompat = existingCompat.map((g) => {
+        if (g.brand.toLowerCase() === targetBrand.toLowerCase()) {
+          found = true;
+          return { brand: matchedBrand.name, models: parsedModels };
+        }
+        return g;
+      });
+      if (!found) {
+        updatedCompat.push({ brand: matchedBrand.name, models: parsedModels });
+      }
+    }
+
+    const allModels = [...new Set(updatedCompat.flatMap((g) => g.models))];
+    const update = {
+      compatibility: updatedCompat,
+      phone_brand: updatedCompat[0]?.brand || "",
+      phone_models: allModels,
+      updated_at: nowIso(),
+    };
+
+    await db.collection("template_products").updateOne({ id: existing.id }, { $set: update });
+
+    if (existing.design_id) {
+      const siblings = await loadDesignSiblings(existing);
+      for (const sib of siblings) {
+        if (sib.id === existing.id) continue;
+        if (action === "remove") {
+          const sibCompat = Array.isArray(sib.compatibility) && sib.compatibility.length > 0
+            ? sib.compatibility.filter((g) => g.brand.toLowerCase() !== targetBrand.toLowerCase())
+            : [];
+          const sibModels = [...new Set(sibCompat.flatMap((g) => g.models || []))];
+          await db.collection("template_products").updateOne(
+            { id: sib.id },
+            {
+              $set: {
+                compatibility: sibCompat,
+                phone_brand: sibCompat[0]?.brand || "",
+                phone_models: sibModels,
+                updated_at: nowIso(),
+              },
+            }
+          );
+        } else {
+          const sibCompat = Array.isArray(sib.compatibility) && sib.compatibility.length > 0
+            ? sib.compatibility
+            : normalizeCompatibility(sib.compatibility, sib.phone_brand, sib.phone_models);
+          const wasIdentical = JSON.stringify(sibCompat) === JSON.stringify(existingCompat);
+          if (wasIdentical) {
+            await db.collection("template_products").updateOne(
+              { id: sib.id },
+              { $set: update }
+            );
+          }
+        }
+      }
+    }
+
+    const saved = await db.collection("template_products").findOne({ id: existing.id }, { projection: { _id: 0 } });
+    res.json(adminProductPayload(saved));
+  } catch (err) {
+    console.error("Error updating brand group:", err);
+    return res.status(500).json({ detail: err.message || "Failed to update brand group" });
+  }
+});
+
+api.patch("/admin/template-products/:id/material-variants/:variantId", getCurrentAdmin, async (req, res) => {
+  try {
+    const existing = await db.collection("template_products").findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ detail: "Template product not found" });
+
+    const variant = await db.collection("template_products").findOne({ id: req.params.variantId });
+    if (!variant) return res.status(404).json({ detail: "Material variant not found" });
+
+    const patch = {};
+    if (req.body.case_type !== undefined) {
+      const cType = String(req.body.case_type || "").trim().toLowerCase();
+      if (!cType) return res.status(400).json({ detail: "Case type is required" });
+      const siblings = await loadDesignSiblings(existing);
+      const duplicate = siblings.find(
+        (s) => s.id !== variant.id && caseTypeKey(s.case_type) === caseTypeKey(cType)
+      );
+      if (duplicate) {
+        return res.status(400).json({ detail: `Material variant "${cType}" already exists for this design` });
+      }
+      patch.case_type = cType;
+    }
+    if (req.body.price !== undefined) {
+      const p = Number(req.body.price);
+      if (!Number.isFinite(p) || p <= 0) return res.status(400).json({ detail: "Price must be greater than 0" });
+      patch.price = p;
+    }
+    if (req.body.sale_price !== undefined) {
+      const sp = req.body.sale_price === null || req.body.sale_price === "" ? null : Number(req.body.sale_price);
+      if (sp !== null && (!Number.isFinite(sp) || sp < 0)) return res.status(400).json({ detail: "Sale price must be >= 0" });
+      patch.sale_price = sp;
+    }
+    if (req.body.stock !== undefined) {
+      patch.stock = Math.max(0, parseInt(req.body.stock, 10) || 0);
+    }
+    if (req.body.sku !== undefined) {
+      patch.sku = String(req.body.sku || "").trim().slice(0, 64) || null;
+    }
+    if (req.body.description !== undefined) {
+      patch.description = String(req.body.description || "").trim();
+    }
+    if (req.body.status !== undefined) {
+      patch.status = req.body.status === "draft" ? "draft" : "published";
+    }
+    if (req.body.material !== undefined) {
+      patch.material = String(req.body.material || "").trim();
+    }
+    if (req.body.is_default !== undefined) {
+      const wantDefault = Boolean(req.body.is_default);
+      if (wantDefault) {
+        const effStatus = patch.status !== undefined ? patch.status : variant.status;
+        if (effStatus !== "published") {
+          return res.status(400).json({ detail: "Cannot set a disabled or draft material as default. Please enable it first." });
+        }
+        const effStock = patch.stock !== undefined ? patch.stock : variant.stock;
+        if (effStock != null && Number(effStock) <= 0) {
+          return res.status(400).json({ detail: "Cannot set an out-of-stock material as default." });
+        }
+        const designId = existing.design_id || variant.design_id;
+        if (designId) {
+          await db.collection("template_products").updateMany(
+            { design_id: designId },
+            { $set: { is_default: false, updated_at: nowIso() } }
+          );
+        }
+        patch.is_default = true;
+      } else {
+        patch.is_default = false;
+      }
+    }
+    if (Array.isArray(req.body.compatibility)) {
+      patch.compatibility = req.body.compatibility;
+      patch.phone_models = [...new Set(patch.compatibility.flatMap((g) => g.models || []))];
+      patch.phone_brand = patch.compatibility[0]?.brand || variant.phone_brand || "";
+    } else if (Array.isArray(req.body.phone_models)) {
+      patch.phone_models = parsePhoneModels(req.body.phone_models);
+      if (Array.isArray(variant.compatibility) && variant.compatibility.length > 0) {
+        const mSet = new Set(patch.phone_models.map((m) => String(m).trim().toLowerCase()));
+        patch.compatibility = variant.compatibility
+          .map((g) => ({
+            brand: g.brand,
+            models: (g.models || []).filter((m) => mSet.has(String(m).trim().toLowerCase())),
+          }))
+          .filter((g) => g.models.length > 0);
+      }
+    }
+
+    if (Array.isArray(req.body.variant_inventory)) {
+      const allModels = patch.phone_models || variant.phone_models || [];
+      const norm = normalizeVariantInventory(
+        req.body.variant_inventory,
+        allModels,
+        patch.stock ?? variant.stock ?? 0
+      );
+      if (norm.value) {
+        patch.variant_inventory = norm.value;
+        patch.stock = availableStock(norm.value);
+      }
+    } else if (patch.phone_models && variant.variant_inventory) {
+      const norm = normalizeVariantInventory(
+        variant.variant_inventory,
+        patch.phone_models,
+        patch.stock ?? variant.stock ?? 0
+      );
+      if (norm.value) {
+        patch.variant_inventory = norm.value;
+        if (patch.stock === undefined) {
+          patch.stock = availableStock(norm.value);
+        }
+      }
+    }
+    if (req.body.thumbnail !== undefined) {
+      patch.thumbnail = req.body.thumbnail;
+    }
+    if (Array.isArray(req.body.images)) {
+      patch.images = req.body.images;
+    }
+
+    patch.updated_at = nowIso();
+    await db.collection("template_products").updateOne({ id: variant.id }, { $set: patch });
+
+    const savedVariant = await db.collection("template_products").findOne({ id: variant.id }, { projection: { _id: 0 } });
+    const siblingsAfter = await loadDesignSiblings(existing);
+    res.json({
+      item: adminProductPayload(savedVariant),
+      items: siblingsAfter.map(adminProductPayload),
+    });
+  } catch (err) {
+    console.error("Error updating material variant:", err);
+    return res.status(500).json({ detail: err.message || "Failed to update material variant" });
+  }
+});
+
+const handleSetDefaultVariant = async (req, res) => {
+  try {
+    const existing = await db.collection("template_products").findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ detail: "Template product not found" });
+
+    const targetVariant = await db.collection("template_products").findOne({ id: req.params.variantId });
+    if (!targetVariant) return res.status(404).json({ detail: "Material variant not found" });
+
+    const designId = existing.design_id || targetVariant.design_id;
+    if (designId && targetVariant.design_id && existing.design_id !== targetVariant.design_id) {
+      return res.status(400).json({ detail: "The selected variant does not belong to this design group" });
+    }
+
+    if (targetVariant.status !== "published") {
+      return res.status(400).json({ detail: "Cannot set a disabled or draft material as default. Please enable it first." });
+    }
+
+    if (targetVariant.stock != null && Number(targetVariant.stock) <= 0) {
+      return res.status(400).json({ detail: "Cannot set an out-of-stock material as default." });
+    }
+
+    const now = nowIso();
+    if (designId) {
+      await db.collection("template_products").updateMany(
+        { design_id: designId },
+        { $set: { is_default: false, updated_at: now } }
+      );
+    } else {
+      await db.collection("template_products").updateOne(
+        { id: existing.id },
+        { $set: { is_default: false, updated_at: now } }
+      );
+    }
+
+    await db.collection("template_products").updateOne(
+      { id: targetVariant.id },
+      { $set: { is_default: true, updated_at: now } }
+    );
+
+    const siblingsAfter = await loadDesignSiblings(existing);
+    res.json({
+      ok: true,
+      default_variant_id: targetVariant.id,
+      item: adminProductPayload(await db.collection("template_products").findOne({ id: targetVariant.id })),
+      items: siblingsAfter.map(adminProductPayload),
+    });
+  } catch (err) {
+    console.error("Error setting default material variant:", err);
+    res.status(500).json({ detail: err.message || "Failed to set default material variant" });
+  }
+};
+
+api.post("/admin/template-products/:id/material-variants/:variantId/default", getCurrentAdmin, handleSetDefaultVariant);
+api.post("/admin/template-products/:id/default-variant/:variantId", getCurrentAdmin, handleSetDefaultVariant);
+
+api.delete("/admin/template-products/:id/material-variants/:variantId", getCurrentAdmin, async (req, res) => {
+  try {
+    const existing = await db.collection("template_products").findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ detail: "Template product not found" });
+
+    const variant = await db.collection("template_products").findOne({ id: req.params.variantId });
+    if (!variant) return res.status(404).json({ detail: "Material variant not found" });
+
+    await db.collection("template_products").updateOne(
+      { id: variant.id },
+      { $unset: { design_id: "" }, $set: { updated_at: nowIso() } }
+    );
+
+    const siblingsAfter = await loadDesignSiblings(existing);
+    res.json({
+      ok: true,
+      unlinked: variant.id,
+      items: siblingsAfter.map(adminProductPayload),
+    });
+  } catch (err) {
+    console.error("Error unlinking material variant:", err);
+    return res.status(500).json({ detail: err.message || "Failed to unlink material variant" });
+  }
 });
 
 api.patch("/admin/template-products/:id/variants/:variantId", getCurrentAdmin, async (req, res) => {
@@ -2922,6 +3491,8 @@ api.patch("/admin/template-products/:id/variants/:variantId", getCurrentAdmin, a
   const result = applyVariantInventoryUpdate(existing, req.params.variantId, {
     stock_quantity: req.body?.stock_quantity,
     is_out_of_stock: req.body?.is_out_of_stock,
+    price: req.body?.price,
+    sale_price: req.body?.sale_price,
   });
   if (result.error) return res.status(400).json({ detail: result.error });
 
@@ -2993,23 +3564,63 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     return res.status(400).json({ detail: "sale_price must be a number that is 0 or greater" });
   }
 
+  const existingCompat = Array.isArray(existing.compatibility) && existing.compatibility.length > 0
+    ? existing.compatibility
+    : (existing.phone_brand ? [{ brand: existing.phone_brand, models: Array.isArray(existing.phone_models) ? existing.phone_models : [] }] : []);
+
+  let targetCompat = existingCompat;
+  if (Array.isArray(req.body?.compatibility) && req.body.compatibility.length > 0) {
+    targetCompat = req.body.compatibility;
+  } else if (Array.isArray(req.body?.phone_models) && req.body.phone_models.length > 0) {
+    const modelSet = new Set(req.body.phone_models.map((m) => String(m).trim().toLowerCase()));
+    targetCompat = existingCompat
+      .map((g) => ({
+        brand: g.brand,
+        models: (g.models || []).filter((m) => modelSet.has(String(m).trim().toLowerCase())),
+      }))
+      .filter((g) => g.models.length > 0);
+  }
+
   const targetModels = Array.isArray(req.body?.phone_models) && req.body.phone_models.length > 0
     ? req.body.phone_models
-    : (Array.isArray(existing.phone_models) ? existing.phone_models : []);
+    : [...new Set(targetCompat.flatMap((g) => g.models || []))];
 
   const stockOverride = req.body?.stock;
   const initialStock = stockOverride != null && stockOverride !== ""
     ? Math.max(0, Math.floor(Number(stockOverride) || 0))
     : Math.max(0, Math.floor(Number(existing.stock) || 0));
 
-  let variant_inventory = synthesizeVariantInventory(targetModels, initialStock);
-  let stock = availableStock(variant_inventory) || initialStock;
+  let variant_inventory = [];
+  if (Array.isArray(req.body?.variant_inventory) && req.body.variant_inventory.length > 0) {
+    const norm = normalizeVariantInventory(req.body.variant_inventory, targetModels, initialStock);
+    if (norm.value) {
+      variant_inventory = norm.value;
+      stock = availableStock(variant_inventory);
+    }
+  } else {
+    variant_inventory = synthesizeVariantInventory(targetModels, initialStock);
+    stock = availableStock(variant_inventory) || initialStock;
+  }
 
   const designId = await ensureDesignId(existing);
   const slug = await ensureUniqueTemplateSlug(
     `${existing.slug}-${case_type.replace(/-case$/, "")}`
   );
   const ts = nowIso();
+  const isDefault = Boolean(req.body?.is_default);
+  if (isDefault) {
+    if (req.body?.status === "draft") {
+      return res.status(400).json({ detail: "Cannot set a disabled or draft material as default. Please enable it first." });
+    }
+    if (stock <= 0) {
+      return res.status(400).json({ detail: "Cannot set an out-of-stock material as default." });
+    }
+    await db.collection("template_products").updateMany(
+      { design_id: designId },
+      { $set: { is_default: false, updated_at: ts } }
+    );
+  }
+
   const defaultMat = String(req.body?.material || "").trim() || (
     case_type.includes("silicone") ? "Liquid Silicone" :
     case_type.includes("transparent") ? "Polycarbonate" :
@@ -3020,11 +3631,13 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     id: crypto.randomUUID(),
     title: existing.title,
     slug,
+    is_default: isDefault,
     product_type: existing.product_type,
     description: String(req.body?.description || existing.description || "").trim(),
     short_description: String(req.body?.short_description || existing.short_description || "").trim().slice(0, 300),
-    phone_brand: existing.phone_brand,
+    phone_brand: targetCompat[0]?.brand || existing.phone_brand,
     phone_models: targetModels,
+    compatibility: targetCompat,
     category: existing.category,
     collection: existing.collection,
     case_type,
@@ -5146,3 +5759,4 @@ process.on("SIGINT", async () => {
   if (client) await client.close();
   process.exit(0);
 });
+

@@ -59,11 +59,35 @@ function normalizeVariantInventory(raw, phoneModels, fallbackStock = 0) {
     }
     const is_out_of_stock = asBool(entry.is_out_of_stock) || stock_quantity <= 0;
     const explicitId = String(entry.variant_id || "").trim();
+
+    let price = null;
+    if (entry.price != null && entry.price !== "") {
+      const p = Number(entry.price);
+      if (!Number.isFinite(p) || p < 0) {
+        return { error: `Invalid price for ${model_name}` };
+      }
+      price = Math.round(p * 100) / 100;
+    }
+
+    let sale_price = null;
+    if (entry.sale_price != null && entry.sale_price !== "") {
+      const sp = Number(entry.sale_price);
+      if (!Number.isFinite(sp) || sp < 0) {
+        return { error: `Invalid sale price for ${model_name}` };
+      }
+      sale_price = Math.round(sp * 100) / 100;
+    }
+
+    const brand = entry.brand ? String(entry.brand).trim() : null;
+
     parsed.push({
       variant_id: explicitId || slugify(model_name),
       model_name,
+      brand,
       stock_quantity,
       is_out_of_stock,
+      price,
+      sale_price,
     });
   }
 
@@ -82,15 +106,21 @@ function normalizeVariantInventory(raw, phoneModels, fallbackStock = 0) {
       return {
         variant_id: match.variant_id || slugify(model_name),
         model_name,
+        brand: match.brand || null,
         stock_quantity: match.stock_quantity,
         is_out_of_stock: match.is_out_of_stock || match.stock_quantity <= 0,
+        price: match.price ?? null,
+        sale_price: match.sale_price ?? null,
       };
     }
     return {
       variant_id: slugify(model_name),
       model_name,
+      brand: null,
       stock_quantity: fallback,
       is_out_of_stock: fallback <= 0,
+      price: null,
+      sale_price: null,
     };
   });
 
@@ -187,7 +217,9 @@ function applyVariantInventoryUpdate(product, variantKey, patch = {}) {
 
   const hasQty = patch.stock_quantity != null && patch.stock_quantity !== "";
   const hasFlag = patch.is_out_of_stock != null && patch.is_out_of_stock !== "";
-  if (!hasQty && !hasFlag) return { error: "No inventory fields to update" };
+  const hasPrice = patch.price !== undefined;
+  const hasSalePrice = patch.sale_price !== undefined;
+  if (!hasQty && !hasFlag && !hasPrice && !hasSalePrice) return { error: "No inventory fields to update" };
 
   const current = { ...inventory[index] };
   if (hasQty) {
@@ -206,6 +238,22 @@ function applyVariantInventoryUpdate(product, variantKey, patch = {}) {
       return { error: "Set a stock quantity above 0 before marking this variant in stock" };
     }
     current.is_out_of_stock = flag || current.stock_quantity <= 0;
+  }
+
+  if (hasPrice) {
+    const p = patch.price === null || patch.price === "" ? null : Number(patch.price);
+    if (p !== null && (!Number.isFinite(p) || p < 0)) {
+      return { error: "price must be a positive number or null" };
+    }
+    current.price = p != null ? Math.round(p * 100) / 100 : null;
+  }
+
+  if (hasSalePrice) {
+    const sp = patch.sale_price === null || patch.sale_price === "" ? null : Number(patch.sale_price);
+    if (sp !== null && (!Number.isFinite(sp) || sp < 0)) {
+      return { error: "sale_price must be a positive number or null" };
+    }
+    current.sale_price = sp != null ? Math.round(sp * 100) / 100 : null;
   }
 
   const variant_inventory = inventory.map((variant, i) => (i === index ? current : variant));
@@ -262,4 +310,29 @@ module.exports = {
   assertCanPurchaseVariant,
   applyVariantInventoryUpdate,
   consumeVariantStock,
+  resolveModelPrice,
 };
+
+function resolveModelPrice(product, modelName) {
+  if (!product) return { price: 0, sale_price: null, effective_price: 0 };
+  const basePrice = Number(product.price) || 0;
+  const baseSale = (product.sale_price != null && product.sale_price !== "") ? Number(product.sale_price) : null;
+  const inventory = resolveVariantInventory(product);
+  const variant = findVariant(inventory, { modelName });
+  if (variant && variant.price != null && Number(variant.price) > 0) {
+    const price = Number(variant.price);
+    const sale_price = (variant.sale_price != null && Number(variant.sale_price) > 0) ? Number(variant.sale_price) : null;
+    const effective_price = (sale_price != null && sale_price > 0 && sale_price < price) ? sale_price : price;
+    return {
+      price,
+      sale_price: sale_price && sale_price < price ? sale_price : null,
+      effective_price,
+    };
+  }
+  const effective_price = (baseSale != null && baseSale > 0 && baseSale < basePrice) ? baseSale : (product.effective_price ?? basePrice);
+  return {
+    price: basePrice,
+    sale_price: baseSale && baseSale < basePrice ? baseSale : null,
+    effective_price,
+  };
+}

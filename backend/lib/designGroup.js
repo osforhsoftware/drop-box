@@ -1,5 +1,5 @@
-const { effectivePrice, toPublicProduct, toRelativeMediaUrl } = require("./templateProducts");
-const { productHasAvailableStock, resolveVariantInventory } = require("./variantInventory");
+const { effectivePrice, toPublicProduct, toRelativeMediaUrl, normalizeCompatibility } = require("./templateProducts");
+const { productHasAvailableStock, resolveVariantInventory, isVariantOutOfStock } = require("./variantInventory");
 
 /** Normalize case-type slugs so "silicone" and "silicone-case" count as one material. */
 function caseTypeKey(slug) {
@@ -35,6 +35,24 @@ function pickCanonical(members) {
   const list = (members || []).filter(Boolean);
   if (!list.length) return null;
   return [...list].sort((a, b) => {
+    // 1. Explicit in-stock default variant comes first
+    const aDef = Boolean(a.is_default && a.status === "published" && productHasAvailableStock(a));
+    const bDef = Boolean(b.is_default && b.status === "published" && productHasAvailableStock(b));
+    if (aDef && !bDef) return -1;
+    if (!aDef && bDef) return 1;
+
+    // 2. Order count
+    const ordersB = Number(b.order_count || 0);
+    const ordersA = Number(a.order_count || 0);
+    if (ordersB !== ordersA) return ordersB - ordersA;
+
+    // 3. Lowest effective price
+    const effA = effectivePrice(a);
+    const effB = effectivePrice(b);
+    if (Number.isFinite(effA) && Number.isFinite(effB) && effA !== effB) {
+      return effA - effB;
+    }
+
     const created = String(a.created_at || "").localeCompare(String(b.created_at || ""));
     if (created) return created;
     return String(a.id || "").localeCompare(String(b.id || ""));
@@ -46,7 +64,23 @@ function startingPriceForMembers(members) {
   if (!list.length) return 0;
   const available = list.filter(productHasAvailableStock);
   const source = available.length ? available : list;
-  const prices = source.map(effectivePrice).filter((price) => Number.isFinite(price) && price > 0);
+  const prices = [];
+  for (const item of source) {
+    const inv = resolveVariantInventory(item);
+    if (inv && inv.length > 0) {
+      for (const row of inv) {
+        if (!isVariantOutOfStock(row)) {
+          const rowPrice = row.price != null && Number(row.price) > 0 ? Number(row.price) : effectivePrice(item);
+          const rowSale = row.sale_price != null && Number(row.sale_price) > 0 ? Number(row.sale_price) : null;
+          const eff = (rowSale && rowSale < rowPrice) ? rowSale : rowPrice;
+          if (eff > 0) prices.push(eff);
+        }
+      }
+    } else {
+      const p = effectivePrice(item);
+      if (p > 0) prices.push(p);
+    }
+  }
   if (!prices.length) return effectivePrice(list[0]);
   return Math.min(...prices);
 }
@@ -99,6 +133,7 @@ function toPublicMaterialVariant(doc, canonical, labelMap = {}) {
   const ownImages = variantHasOwnImages(doc, canonical);
   return {
     id: product.id,
+    is_default: Boolean(doc.is_default || (canonical && doc.id === canonical.id && doc.is_default !== false)),
     title: product.title,
     slug: product.slug,
     case_type: product.case_type,
@@ -118,7 +153,13 @@ function toPublicMaterialVariant(doc, canonical, labelMap = {}) {
     thumbnail: ownImages ? product.thumbnail : null,
     images: ownImages ? product.images : null,
     has_variant_image: ownImages,
-    phone_models: Array.isArray(product.phone_models) ? product.phone_models : [],
+    phone_brand: product.phone_brand || canonical?.phone_brand || "",
+    phone_models: Array.isArray(product.phone_models) && product.phone_models.length > 0
+      ? product.phone_models
+      : (Array.isArray(canonical?.phone_models) ? canonical.phone_models : []),
+    compatibility: Array.isArray(product.compatibility) && product.compatibility.length > 0
+      ? product.compatibility
+      : (Array.isArray(canonical?.compatibility) ? canonical.compatibility : []),
     status: product.status || "published",
   };
 }
@@ -135,8 +176,33 @@ function toPublicListingProduct(group, labelMap = {}) {
   const priceSourceMembers = available.length ? available : members;
   const cheapest = [...priceSourceMembers].sort((a, b) => effectivePrice(a) - effectivePrice(b))[0];
   const cheapestPublic = toPublicProduct(cheapest) || publicDoc;
+
+  const brandGroupMap = new Map();
+  for (const m of members) {
+    const pCompat = Array.isArray(m.compatibility) && m.compatibility.length > 0
+      ? m.compatibility
+      : normalizeCompatibility(m.compatibility, m.phone_brand, m.phone_models);
+    for (const g of pCompat) {
+      const bKey = String(g.brand || "").trim().toLowerCase();
+      if (!bKey) continue;
+      if (!brandGroupMap.has(bKey)) {
+        brandGroupMap.set(bKey, { brand: g.brand, models: [] });
+      }
+      const entry = brandGroupMap.get(bKey);
+      for (const model of g.models || []) {
+        if (!entry.models.some((x) => x.toLowerCase() === String(model).toLowerCase())) {
+          entry.models.push(model);
+        }
+      }
+    }
+  }
+  const mergedCompatibility = Array.from(brandGroupMap.values());
+  const mergedModels = [...new Set(mergedCompatibility.flatMap((g) => g.models))];
+
   return {
     ...publicDoc,
+    is_default: true,
+    default_variant_id: canonical.id,
     design_id: group.design_id || canonical.design_id || null,
     material_count: members.length,
     materials: members.map((item) => item.case_type),
@@ -148,6 +214,9 @@ function toPublicListingProduct(group, labelMap = {}) {
     sale_price: priceFrom ? cheapestPublic.sale_price : publicDoc.sale_price,
     discount_percent: priceFrom ? cheapestPublic.discount_percent : publicDoc.discount_percent,
     in_stock: members.some(productHasAvailableStock),
+    phone_brand: mergedCompatibility[0]?.brand || publicDoc.phone_brand,
+    phone_models: mergedModels.length > 0 ? mergedModels : publicDoc.phone_models,
+    compatibility: mergedCompatibility.length > 0 ? mergedCompatibility : publicDoc.compatibility,
   };
 }
 

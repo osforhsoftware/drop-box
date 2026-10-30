@@ -45,4 +45,26 @@ describe("orderMaterial", () => {
       "Glass Case"
     );
   });
+  it("preserves material and label for high-tier variant (Glass at ₹609) with matched product blank", () => {
+    const labelMap = buildCaseTypeLabelMap([
+      { slug: "matte", name: "Matte Case" },
+      { slug: "glass", name: "Glass Case" },
+    ]);
+    const snap = snapshotOrderMaterial({
+      templateProduct: {
+        id: "tpl-glass-609",
+        case_type: "glass",
+        case_type_label: "Toughened Glass Case",
+        material: "9H Tempered Glass",
+        price: 609,
+      },
+      product: { name: "Glass Case", slug: "glass", material: "9H Tempered Glass" },
+    }, labelMap);
+    assert.deepEqual(snap, {
+      case_type: "glass",
+      case_type_label: "Toughened Glass Case",
+      material: "9H Tempered Glass",
+    });
+    assert.equal(orderMaterialLabel(snap), "Toughened Glass Case");
+  });
 });

@@ -279,9 +279,9 @@ export default function Checkout() {
           template_product_id: firstItem.template_product_id || null,
           template_product_title: firstItem.template_product?.title || null,
           case_color: firstItem.case_color || null,
-          case_type: firstItem.product?.slug || firstItem.template_product?.case_type || null,
-          case_type_label: firstItem.product?.name || firstItem.template_product?.case_type_label || materialLabel(firstItem) || null,
-          material: firstItem.product?.material || firstItem.template_product?.material || firstItem.product?.name || null,
+          case_type: firstItem.template_product?.case_type || firstItem.product?.slug || null,
+          case_type_label: firstItem.template_product?.case_type_label || materialLabel(firstItem) || firstItem.product?.name || null,
+          material: firstItem.template_product?.material || firstItem.product?.material || firstItem.template_product?.case_type_label || firstItem.product?.name || null,
 
           items: draft.items.map(i => ({
             template_product_id: i.template_product_id || null,
@@ -292,9 +292,9 @@ export default function Checkout() {
             model_name: i.model.name,
             product_id: i.product.id,
             product_name: i.product.name,
-            case_type: i.product?.slug || i.template_product?.case_type || null,
-            case_type_label: i.product?.name || i.template_product?.case_type_label || materialLabel(i) || null,
-            material: i.product?.material || i.template_product?.material || i.product?.name || null,
+            case_type: i.template_product?.case_type || i.product?.slug || null,
+            case_type_label: i.template_product?.case_type_label || materialLabel(i) || i.product?.name || null,
+            material: i.template_product?.material || i.product?.material || i.template_product?.case_type_label || i.product?.name || null,
             design_url: i.design_url,
             preview_url: i.preview_url || i.design_url,
             quantity: i.quantity || 1,
@@ -320,9 +320,9 @@ export default function Checkout() {
           template_product_id: draft.template_product_id || null,
           template_product_title: draft.template_product?.title || null,
           case_color: draft.case_color || null,
-          case_type: draft.product?.slug || draft.template_product?.case_type || null,
-          case_type_label: draft.product?.name || draft.template_product?.case_type_label || materialLabel(draft) || null,
-          material: draft.product?.material || draft.template_product?.material || draft.product?.name || null,
+          case_type: draft.template_product?.case_type || draft.product?.slug || null,
+          case_type_label: draft.template_product?.case_type_label || materialLabel(draft) || draft.product?.name || null,
+          material: draft.template_product?.material || draft.product?.material || draft.template_product?.case_type_label || draft.product?.name || null,
         });
       }
 

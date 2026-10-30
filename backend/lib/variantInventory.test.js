@@ -8,6 +8,7 @@ const {
   assertCanPurchaseVariant,
   isModelOutOfStock,
   productHasAvailableStock,
+  resolveModelPrice,
 } = require("./variantInventory");
 
 const samsungCase = {
@@ -122,4 +123,46 @@ test("saving a product keeps sibling variants and published status", () => {
   assert.equal(parsed.variant_inventory[0].is_out_of_stock, true);
   assert.equal(parsed.variant_inventory[1].stock_quantity, 8);
   assert.equal(parsed.variant_inventory[1].is_out_of_stock, false);
+});
+
+test("normalizeVariantInventory preserves model-specific price, sale_price, and brand", () => {
+  const normalized = normalizeVariantInventory([
+    { model_name: "iPhone 12", stock_quantity: 10, price: 349, sale_price: 299, brand: "Apple" },
+    { model_name: "iPhone 13 Pro", stock_quantity: 6, price: 399, brand: "Apple" },
+  ], ["iPhone 12", "iPhone 13 Pro"]);
+  assert.equal(normalized.error, undefined);
+  assert.equal(normalized.value[0].price, 349);
+  assert.equal(normalized.value[0].sale_price, 299);
+  assert.equal(normalized.value[0].brand, "Apple");
+  assert.equal(normalized.value[1].price, 399);
+  assert.equal(normalized.value[1].sale_price, null);
+});
+
+test("resolveModelPrice returns model-specific price when configured and falls back to product price", () => {
+  const product = {
+    price: 499,
+    sale_price: 449,
+    phone_models: ["iPhone 12", "iPhone 13 Pro", "Galaxy S24"],
+    variant_inventory: [
+      { model_name: "iPhone 12", stock_quantity: 10, price: 349, sale_price: 319 },
+      { model_name: "iPhone 13 Pro", stock_quantity: 6, price: 399 },
+      { model_name: "Galaxy S24", stock_quantity: 8 },
+    ],
+  };
+
+  const p12 = resolveModelPrice(product, "iPhone 12");
+  assert.equal(p12.price, 349);
+  assert.equal(p12.sale_price, 319);
+  assert.equal(p12.effective_price, 319);
+
+  const p13 = resolveModelPrice(product, "iPhone 13 Pro");
+  assert.equal(p13.price, 399);
+  assert.equal(p13.sale_price, null);
+  assert.equal(p13.effective_price, 399);
+
+  // Galaxy S24 has no model-specific price, should inherit product price & sale_price
+  const pS24 = resolveModelPrice(product, "Galaxy S24");
+  assert.equal(pS24.price, 499);
+  assert.equal(pS24.sale_price, 449);
+  assert.equal(pS24.effective_price, 449);
 });
