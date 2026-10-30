@@ -1,9 +1,35 @@
+import { useState } from "react";
 import { Save, X, Download, MessageCircle, ExternalLink, Loader2 } from "lucide-react";
 import { resolveMediaUrl } from "../../../lib/api";
 import { SHIPPING_FEE } from "../../../constants/shipping";
 import { COMPANY_NAME } from "../../../constants/company";
 import { PAYMENT_EDIT_OPTIONS, DELIVERY_EDIT_OPTIONS } from "./orderConstants";
 import { isRazorpayOrder, isFailedPaymentOrder, prettify, fmtDate, toneClass, recordKindLabel, orderMaterialLabel, orderMaterialFinish } from "./orderHelpers";
+
+/** Download the original file bytes (no re-encode) so admin keeps full customer resolution. */
+async function downloadOriginalFile(url, filename) {
+  const res = await fetch(url, { credentials: "include" });
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename || filenameFromUrl(url) || "download";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+function filenameFromUrl(url) {
+  try {
+    const path = new URL(url, window.location.origin).pathname;
+    const base = path.split("/").pop();
+    return base && base.includes(".") ? decodeURIComponent(base) : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function OrderDetailsModal({
   selected,
@@ -20,9 +46,6 @@ export default function OrderDetailsModal({
 }) {
   const razorpayLocked = isRazorpayOrder(selected);
   const statusLocked = isFailedPaymentOrder(selected);
-  const previewSrc = selected ? resolveMediaUrl(selected.preview_url) : null;
-  const designSrc = selected ? resolveMediaUrl(selected.design_url) : null;
-  const printSrc = selected ? resolveMediaUrl(selected.print_url) : null;
   const paymentSrc = selected ? resolveMediaUrl(selected.payment_screenshot_url) : null;
   const verifyLabel = selected?.payment_verification_label || selected?.payment_label || prettify(selected?.payment_status);
 
@@ -133,7 +156,7 @@ export default function OrderDetailsModal({
                           {orderMaterialFinish(item) ? <Info l="Finish" v={orderMaterialFinish(item)} /> : null}
                           <Info l="Quantity" v={item.quantity} />
                           <Info l="Price" v={`₹${item.price}`} />
-                          <ItemFiles item={item} idx={idx} />
+                          <ItemFiles item={item} idx={idx} orderId={selected.order_id} />
                         </div>
                       ))}
                     </div>
@@ -150,25 +173,13 @@ export default function OrderDetailsModal({
                       <Info l="Price" v={`₹${selected.subtotal ?? selected.amount}`} />
                     </Section>
                     <Section title="Design">
-                      <div className="flex flex-wrap gap-4 items-start">
-                        {previewSrc ? (
-                          <a href={previewSrc} target="_blank" rel="noreferrer" className="block group">
-                            <img src={previewSrc} className="w-28 h-44 rounded-lg object-cover border border-white/10 group-hover:border-brand/50" alt="Case preview" />
-                            <div className="text-xs text-white/40 mt-1 flex items-center gap-1">Preview <ExternalLink className="w-3 h-3" /></div>
-                          </a>
-                        ) : (
-                          <div className="text-white/40 text-sm">No preview image.</div>
-                        )}
-                        {printSrc ? (
-                          <a data-testid="download-print" href={printSrc} download target="_blank" rel="noreferrer" className="btn-primary text-sm inline-flex items-center gap-2 self-center">
-                            <Download className="w-4 h-4" /> Download 300 DPI print
-                          </a>
-                        ) : designSrc ? (
-                          <a data-testid="download-design" href={designSrc} download target="_blank" rel="noreferrer" className="btn-secondary text-sm inline-flex items-center gap-2 self-center">
-                            <Download className="w-4 h-4" /> Download artwork
-                          </a>
-                        ) : null}
-                      </div>
+                      <DesignAssets
+                        designUrl={selected.design_url}
+                        previewUrl={selected.preview_url}
+                        printUrl={selected.print_url}
+                        orderId={selected.order_id}
+                        testIdPrefix="order"
+                      />
                     </Section>
                   </>
                 )}
@@ -328,26 +339,140 @@ function PaymentVerificationBanner({ order }) {
   );
 }
 
-function ItemFiles({ item, idx }) {
+function ItemFiles({ item, idx, orderId }) {
   return (
-    <div className="flex flex-wrap gap-4 items-start mt-3">
-      {item.preview_url ? (
-        <a href={resolveMediaUrl(item.preview_url)} target="_blank" rel="noreferrer" className="block group">
-          <img src={resolveMediaUrl(item.preview_url)} className="w-20 h-32 rounded-lg object-cover border border-white/10 group-hover:border-brand/50" alt="Case preview" />
-          <div className="text-xs text-white/40 mt-1 flex items-center gap-1">Preview <ExternalLink className="w-3 h-3" /></div>
-        </a>
-      ) : null}
-      {item.print_url ? (
-        <a data-testid={`download-print-${idx}`} href={resolveMediaUrl(item.print_url)} download target="_blank" rel="noreferrer" className="btn-primary text-xs px-2 py-1.5 inline-flex items-center gap-2 self-center">
-          <Download className="w-3.5 h-3.5" /> Print File
-        </a>
-      ) : item.design_url ? (
-        <a data-testid={`download-design-${idx}`} href={resolveMediaUrl(item.design_url)} download target="_blank" rel="noreferrer" className="btn-secondary text-xs px-2 py-1.5 inline-flex items-center gap-2 self-center">
-          <Download className="w-3.5 h-3.5" /> Artwork
-        </a>
+    <div className="mt-3">
+      <DesignAssets
+        designUrl={item.design_url}
+        previewUrl={item.preview_url}
+        printUrl={item.print_url}
+        orderId={orderId}
+        testIdPrefix={`item-${idx}`}
+        compact
+      />
+    </div>
+  );
+}
+
+function DesignAssets({ designUrl, previewUrl, printUrl, orderId, testIdPrefix, compact }) {
+  const designSrc = resolveMediaUrl(designUrl);
+  const previewSrc = resolveMediaUrl(previewUrl);
+  const printSrc = resolveMediaUrl(printUrl);
+  const thumb = compact ? "w-20 h-32" : "w-28 h-44";
+  const btn = compact ? "btn-secondary text-xs px-2 py-1.5" : "btn-secondary text-sm";
+  const btnPrimary = compact ? "btn-primary text-xs px-2 py-1.5" : "btn-primary text-sm";
+  const hasAny = designSrc || previewSrc || printSrc;
+
+  if (!hasAny) {
+    return <div className="text-white/40 text-sm">No design files for this item.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-4 items-start">
+        {designSrc ? (
+          <a href={designSrc} target="_blank" rel="noreferrer" className="block group" data-testid={`${testIdPrefix}-design-thumb`}>
+            <img
+              src={designSrc}
+              className={`${thumb} rounded-lg object-contain bg-black/30 border border-white/10 group-hover:border-brand/50`}
+              alt="Customer uploaded artwork"
+            />
+            <div className="text-xs text-white/40 mt-1 flex items-center gap-1">
+              Customer original <ExternalLink className="w-3 h-3" />
+            </div>
+          </a>
+        ) : null}
+        {previewSrc ? (
+          <a href={previewSrc} target="_blank" rel="noreferrer" className="block group" data-testid={`${testIdPrefix}-preview-thumb`}>
+            <img
+              src={previewSrc}
+              className={`${thumb} rounded-lg object-cover border border-white/10 group-hover:border-brand/50`}
+              alt="Case mockup preview"
+            />
+            <div className="text-xs text-white/40 mt-1 flex items-center gap-1">
+              Case mockup <ExternalLink className="w-3 h-3" />
+            </div>
+          </a>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {designSrc ? (
+          <DownloadButton
+            testId={`${testIdPrefix}-download-design`}
+            className={btn}
+            url={designSrc}
+            filename={`customer-original-${orderId || "design"}${extFromUrl(designSrc)}`}
+            label="Download original"
+          />
+        ) : null}
+        {previewSrc ? (
+          <DownloadButton
+            testId={`${testIdPrefix}-download-preview`}
+            className={btn}
+            url={previewSrc}
+            filename={`case-mockup-${orderId || "preview"}${extFromUrl(previewSrc)}`}
+            label="Download mockup"
+          />
+        ) : null}
+        {printSrc ? (
+          <DownloadButton
+            testId={`${testIdPrefix}-download-print`}
+            className={btnPrimary}
+            url={printSrc}
+            filename={`print-300dpi-${orderId || "print"}${extFromUrl(printSrc) || ".png"}`}
+            label={compact ? "Print file" : "Download 300 DPI print"}
+          />
+        ) : null}
+      </div>
+      {designSrc ? (
+        <p className="text-[11px] text-white/35 leading-relaxed">
+          Original is the exact file the customer uploaded (no compression). Mockup is the on-case preview.
+        </p>
       ) : null}
     </div>
   );
+}
+
+function DownloadButton({ url, filename, label, className, testId }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const onClick = async () => {
+    setErr("");
+    setBusy(true);
+    try {
+      await downloadOriginalFile(url, filename);
+    } catch {
+      // Fallback: open full-quality file in a new tab if blob download is blocked
+      setErr("Opened in new tab — use Save As for the full file.");
+      window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="inline-flex flex-col gap-1">
+      <button
+        type="button"
+        data-testid={testId}
+        disabled={busy}
+        onClick={onClick}
+        className={`${className} inline-flex items-center gap-2 self-start disabled:opacity-50`}
+      >
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+        {label}
+      </button>
+      {err ? <span className="text-[10px] text-amber-200/80">{err}</span> : null}
+    </div>
+  );
+}
+
+function extFromUrl(url) {
+  const name = filenameFromUrl(url);
+  if (!name) return "";
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i) : "";
 }
 
 function Section({ title, children }) {
