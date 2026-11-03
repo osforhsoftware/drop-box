@@ -71,6 +71,7 @@ const {
   notTrashedClause,
   trashedClause,
   publishedShopClause,
+  caseTypeFilterClause,
   CATEGORIES,
   CASE_TYPES,
   COLLECTIONS,
@@ -496,7 +497,18 @@ async function resolveCatalogLine(line) {
     // If the passed product blank does not match the chosen template product case type,
     // align product to the chosen template product rather than silently substituting templateProduct
     if (!isDirectMatch) {
-      const matchingProduct = await db.collection("products").findOne(caseTypeFilterClause(tCase));
+      const caseAliases = CASE_TYPE_ALIASES[tCase] || [tCase];
+      const productSlugCandidates = [
+        ...new Set([
+          ...caseAliases,
+          tCase,
+          `${tCase}-case`,
+          tCase.replace(/-case$/, ""),
+        ].filter(Boolean)),
+      ];
+      const matchingProduct = await db.collection("products").findOne({
+        slug: { $in: productSlugCandidates },
+      });
       if (matchingProduct) {
         product = matchingProduct;
         isDirectMatch = true;
