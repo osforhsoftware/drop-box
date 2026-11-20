@@ -100,6 +100,29 @@ function parsePhoneModels(raw) {
   return [];
 }
 
+/**
+ * Normalize phone model names for comparison.
+ * Treats "Pixel 7a" and "Pixel 7 a" as the same key.
+ */
+function normalizeModelKey(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/([a-z])(\d)/gi, "$1 $2")
+    .replace(/(\d)([a-z])/gi, "$1 $2")
+    .replace(/\s+/g, " ");
+}
+
+function resolveCatalogModelName(name, catalogModels = []) {
+  const key = normalizeModelKey(name);
+  if (!key) return null;
+  const exact = (catalogModels || []).find(
+    (m) => normalizeModelKey(typeof m === "string" ? m : m?.name) === key
+  );
+  if (!exact) return null;
+  return String(typeof exact === "string" ? exact : exact.name).trim() || null;
+}
+
 function parseNumber(val, fallback = null) {
   if (val == null || val === "") return fallback;
   const n = Number(val);
@@ -412,19 +435,44 @@ function parseCompatibility(rawCompatibility, rawBrand, rawModels, options = {})
           ? allowedModels.filter((m) => m.brand_id === matchedBrand.id)
           : allowedModels;
 
-        const validModelNames = new Set(
-          brandModels.map((m) => String(m.name || m).trim().toLowerCase())
-        );
         const validModelIds = new Set(
           brandModels.map((m) => String(m.id || "").trim()).filter(Boolean)
         );
+        const catalogByKey = new Map();
+        for (const m of brandModels) {
+          const canonical = String(m.name || m).trim();
+          const key = normalizeModelKey(canonical);
+          if (key && !catalogByKey.has(key)) catalogByKey.set(key, canonical);
+        }
 
+        const remapped = [];
+        const invalid = [];
         for (const model of group.models) {
-          const lower = model.toLowerCase();
-          if (!validModelNames.has(lower) && !validModelIds.has(model)) {
-            return { error: `Model "${model}" is not a valid model for ${group.brand}` };
+          if (validModelIds.has(model)) {
+            const byId = brandModels.find((m) => m.id === model);
+            const canonical = String(byId?.name || model).trim();
+            const key = normalizeModelKey(canonical);
+            if (key && !remapped.some((x) => normalizeModelKey(x) === key)) {
+              remapped.push(canonical);
+            }
+            continue;
+          }
+          const resolved = resolveCatalogModelName(model, brandModels);
+          if (!resolved) {
+            invalid.push(model);
+            continue;
+          }
+          const key = normalizeModelKey(resolved);
+          if (!remapped.some((x) => normalizeModelKey(x) === key)) {
+            remapped.push(resolved);
           }
         }
+        if (invalid.length > 0) {
+          return {
+            error: `The following models are not valid for ${group.brand}: ${invalid.join(", ")}`,
+          };
+        }
+        group.models = remapped;
       }
     }
   }
@@ -898,6 +946,8 @@ module.exports = {
   parseMaterialVariants,
   parseTags,
   parsePhoneModels,
+  normalizeModelKey,
+  resolveCatalogModelName,
   buildListFilter,
   buildAdminListFilter,
   buildSort,

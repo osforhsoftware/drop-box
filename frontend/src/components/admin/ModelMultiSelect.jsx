@@ -2,6 +2,11 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { Search, X, Check, Smartphone, Plus, ChevronDown, ChevronUp, Loader2, Settings } from "lucide-react";
 import { api } from "../../lib/api";
 import { toast } from "sonner";
+import {
+  normalizeModelKey,
+  remapModelsToCatalog,
+  resolveCatalogModelName,
+} from "../../constants/templateProducts";
 
 /**
  * Searchable multi-select dropdown for phone models belonging to a selected brand.
@@ -55,35 +60,45 @@ export default function ModelMultiSelect({
   }, [isOpen]);
 
   const selectedSet = useMemo(() => {
-    return new Set((value || []).map((m) => String(m).trim().toLowerCase()));
+    return new Set((value || []).map((m) => normalizeModelKey(m)));
   }, [value]);
+
+  // Only catalog models for this brand are selectable ("active" list shown in the UI).
+  const catalogModels = useMemo(
+    () => (models || []).filter((m) => String(m?.name || "").trim()),
+    [models]
+  );
 
   const filteredModels = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter((m) => m.name.toLowerCase().includes(q));
-  }, [models, query]);
+    if (!q) return catalogModels;
+    return catalogModels.filter((m) => m.name.toLowerCase().includes(q));
+  }, [catalogModels, query]);
 
   const toggleModel = (modelName) => {
-    const trimmed = String(modelName).trim();
-    const lower = trimmed.toLowerCase();
-    if (selectedSet.has(lower)) {
-      onChange(value.filter((m) => String(m).trim().toLowerCase() !== lower));
+    const canonical = resolveCatalogModelName(modelName, catalogModels) || String(modelName).trim();
+    const key = normalizeModelKey(canonical);
+    if (!key) return;
+    if (selectedSet.has(key)) {
+      onChange((value || []).filter((m) => normalizeModelKey(m) !== key));
     } else {
-      onChange([...value, trimmed]);
+      onChange(remapModelsToCatalog([...(value || []), canonical], catalogModels));
     }
   };
 
   const selectAllFiltered = () => {
-    const currentLower = new Set(value.map((m) => String(m).trim().toLowerCase()));
-    const next = [...value];
-    for (const m of filteredModels) {
-      if (!currentLower.has(m.name.trim().toLowerCase())) {
-        next.push(m.name.trim());
-        currentLower.add(m.name.trim().toLowerCase());
-      }
+    // No search: replace selection with exactly the current catalog models (matches Active count).
+    if (!query.trim()) {
+      onChange(catalogModels.map((m) => m.name.trim()));
+      return;
     }
-    onChange(next);
+    // With search: keep other still-valid catalog selections, add filtered matches.
+    const kept = remapModelsToCatalog(value || [], catalogModels);
+    const next = new Map(kept.map((n) => [normalizeModelKey(n), n]));
+    for (const m of filteredModels) {
+      next.set(normalizeModelKey(m.name), m.name.trim());
+    }
+    onChange([...next.values()]);
   };
 
   const deselectAll = () => {
@@ -91,8 +106,12 @@ export default function ModelMultiSelect({
       onChange([]);
       return;
     }
-    const filteredLower = new Set(filteredModels.map((m) => m.name.trim().toLowerCase()));
-    onChange(value.filter((m) => !filteredLower.has(String(m).trim().toLowerCase())));
+    const filteredKeys = new Set(filteredModels.map((m) => normalizeModelKey(m.name)));
+    onChange(
+      remapModelsToCatalog(value || [], catalogModels).filter(
+        (m) => !filteredKeys.has(normalizeModelKey(m))
+      )
+    );
   };
 
   const handleAddNewModel = async (e) => {
@@ -108,8 +127,8 @@ export default function ModelMultiSelect({
     }
 
     // Duplicate check in existing catalog models for this brand
-    const isDuplicate = models.some(
-      (m) => m.name.trim().toLowerCase() === trimmed.toLowerCase()
+    const isDuplicate = catalogModels.some(
+      (m) => normalizeModelKey(m.name) === normalizeModelKey(trimmed)
     );
     if (isDuplicate) {
       toast.error(`"${trimmed}" already exists for ${brandName}`);
@@ -131,10 +150,9 @@ export default function ModelMultiSelect({
         onModelAdded(created);
       }
 
-      // Automatically select the new model
-      if (!selectedSet.has(created.name.trim().toLowerCase())) {
-        onChange([...value, created.name.trim()]);
-      }
+      // Automatically select the new model using canonical catalog name
+      const nextCatalog = [...catalogModels, created];
+      onChange(remapModelsToCatalog([...(value || []), created.name], nextCatalog));
     } catch (err) {
       toast.error(err.response?.data?.detail || `Could not add model "${trimmed}"`);
     } finally {
@@ -175,7 +193,7 @@ export default function ModelMultiSelect({
             </button>
           )}
           <span className="text-[11px] font-mono text-brand bg-brand/10 border border-brand/20 px-2 py-0.5 rounded-full whitespace-nowrap">
-            {value.length} of {models.length} selected
+            {remapModelsToCatalog(value || [], catalogModels).length} of {catalogModels.length} selected
           </span>
         </div>
       </div>
@@ -256,7 +274,7 @@ export default function ModelMultiSelect({
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-[11px] font-mono text-white/50 bg-white/5 px-2 py-0.5 rounded">
-              {value.length}/{models.length}
+              {remapModelsToCatalog(value || [], catalogModels).length}/{catalogModels.length}
             </span>
             {isOpen ? (
               <ChevronUp className="w-4 h-4 text-white/60" />
@@ -321,7 +339,7 @@ export default function ModelMultiSelect({
                 <Loader2 className="w-4 h-4 animate-spin text-brand" />
                 Loading {brandName} models…
               </div>
-            ) : models.length === 0 ? (
+            ) : catalogModels.length === 0 ? (
               <div className="py-6 px-3 text-center text-xs text-amber-300/80 rounded-lg bg-amber-500/10 border border-amber-500/20">
                 <p>No models found for {brandName} in catalog.</p>
                 <button
@@ -341,7 +359,7 @@ export default function ModelMultiSelect({
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                     {filteredModels.map((m) => {
-                      const isChecked = selectedSet.has(m.name.trim().toLowerCase());
+                      const isChecked = selectedSet.has(normalizeModelKey(m.name));
                       return (
                         <button
                           key={m.id || m.name}

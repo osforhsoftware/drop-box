@@ -89,6 +89,45 @@ export function caseTypeLabel(slug) {
   return slug || "";
 }
 
+/**
+ * Normalize phone model names for comparison.
+ * Treats "Pixel 7a" and "Pixel 7 a" as the same key.
+ */
+export function normalizeModelKey(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/([a-z])(\d)/gi, "$1 $2")
+    .replace(/(\d)([a-z])/gi, "$1 $2")
+    .replace(/\s+/g, " ");
+}
+
+/** Map a selected model name to the canonical catalog name, or null if unknown. */
+export function resolveCatalogModelName(name, catalogModels = []) {
+  const key = normalizeModelKey(name);
+  if (!key) return null;
+  const exact = (catalogModels || []).find(
+    (m) => normalizeModelKey(typeof m === "string" ? m : m?.name) === key
+  );
+  if (!exact) return null;
+  return String(typeof exact === "string" ? exact : exact.name).trim() || null;
+}
+
+/** Remap selected model names onto the current catalog; drop unknown names. */
+export function remapModelsToCatalog(selectedNames = [], catalogModels = []) {
+  const next = [];
+  const seen = new Set();
+  for (const raw of selectedNames || []) {
+    const resolved = resolveCatalogModelName(raw, catalogModels);
+    if (!resolved) continue;
+    const key = normalizeModelKey(resolved);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(resolved);
+  }
+  return next;
+}
+
 export function matchesTemplate(p, caseType) {
   if (!p || !caseType) return false;
   const ct = String(caseType).toLowerCase().trim();

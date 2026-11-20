@@ -14,6 +14,8 @@ import {
   TEMPLATE_TAG_SUGGESTIONS,
   syncVariantRows,
   getDesignCompatibility,
+  normalizeModelKey,
+  remapModelsToCatalog,
 } from "../../constants/templateProducts";
 import {
   Plus, Trash2, Pencil, Copy, Star, Eye, EyeOff, Globe, Search, X, Check, RotateCcw,
@@ -297,6 +299,28 @@ export default function AdminTemplateProducts() {
       const res = await api.get("/models", { params: { brand_id: matched.id } });
       const mList = Array.isArray(res.data) ? res.data : [];
       setBrandModels(mList);
+      // Remap any stale/spacing-mismatched selections onto current catalog names.
+      setForm((prev) => {
+        const brandKey = String(brandName || "").trim().toLowerCase();
+        if (!brandKey) return prev;
+        const currentCompat = prev.compatibility || [];
+        let changed = false;
+        const nextCompat = currentCompat.map((g) => {
+          if (g.brand.toLowerCase() !== brandKey) return g;
+          const remapped = remapModelsToCatalog(g.models || [], mList);
+          if (remapped.join("|") === (g.models || []).join("|")) return g;
+          changed = true;
+          return { ...g, models: remapped };
+        });
+        if (!changed) return prev;
+        const allModels = [...new Set(nextCompat.flatMap((g) => g.models || []))];
+        return {
+          ...prev,
+          compatibility: nextCompat,
+          phone_models: allModels,
+          variant_inventory: syncVariantRows(allModels, prev.variant_inventory, prev.stock),
+        };
+      });
       return mList;
     } catch {
       setBrandModels([]);
@@ -392,6 +416,7 @@ export default function AdminTemplateProducts() {
   };
 
   const handleActiveBrandModelsChange = (updatedModels) => {
+    const canonicalModels = remapModelsToCatalog(updatedModels, brandModels);
     setForm((prev) => {
       const currentCompat = prev.compatibility || [];
       const exists = currentCompat.some(
@@ -400,10 +425,10 @@ export default function AdminTemplateProducts() {
       const nextCompat = exists
         ? currentCompat.map((g) =>
             g.brand.toLowerCase() === activeBrandName.toLowerCase()
-              ? { ...g, models: updatedModels }
+              ? { ...g, models: canonicalModels }
               : g
           )
-        : [...currentCompat, { brand: activeBrandName, models: updatedModels }];
+        : [...currentCompat, { brand: activeBrandName, models: canonicalModels }];
 
       const allModels = [...new Set(nextCompat.flatMap((g) => g.models))];
       return {
@@ -707,23 +732,24 @@ export default function AdminTemplateProducts() {
     });
   };
 
-  const buildFormData = () => {
+  const buildFormData = (formOverride = null) => {
+    const source = formOverride || form;
     const fd = new FormData();
     const skip = new Set(["phone_models", "tags", "variant_inventory", "compatibility"]);
-    Object.entries(form).forEach(([k, v]) => {
+    Object.entries(source).forEach(([k, v]) => {
       if (skip.has(k)) return;
       if (typeof v === "boolean") fd.append(k, String(v));
       else if (Array.isArray(v)) return;
       else fd.append(k, v ?? "");
     });
-    const groupsWithModels = (form.compatibility || []).filter((g) => g.models && g.models.length > 0);
-    const finalCompat = groupsWithModels.length > 0 ? groupsWithModels : form.compatibility;
+    const groupsWithModels = (source.compatibility || []).filter((g) => g.models && g.models.length > 0);
+    const finalCompat = groupsWithModels.length > 0 ? groupsWithModels : source.compatibility;
     fd.append("compatibility", JSON.stringify(finalCompat));
-    fd.append("phone_brand", finalCompat[0]?.brand || form.phone_brand || "");
-    fd.append("phone_models", JSON.stringify(form.phone_models));
-    fd.append("tags", JSON.stringify(form.tags));
+    fd.append("phone_brand", finalCompat[0]?.brand || source.phone_brand || "");
+    fd.append("phone_models", JSON.stringify(source.phone_models));
+    fd.append("tags", JSON.stringify(source.tags));
     fd.append("variant_inventory", JSON.stringify(
-      (form.variant_inventory || []).map((row) => ({
+      (source.variant_inventory || []).map((row) => ({
         variant_id: row.variant_id,
         model_name: row.model_name,
         brand: row.brand || null,
@@ -738,13 +764,13 @@ export default function AdminTemplateProducts() {
     if (removeImages.length) fd.append("remove_images", JSON.stringify(removeImages));
 
     if (!editing) {
-      const isPrimaryDefault = !stagedDefaultCaseType || stagedDefaultCaseType === form.case_type;
+      const isPrimaryDefault = !stagedDefaultCaseType || stagedDefaultCaseType === source.case_type;
       fd.append("is_default", String(isPrimaryDefault));
     }
 
     if (editing) {
       const otherVariants = materialSiblings
-        .filter((s) => s.id !== editing.id && caseTypeKey(s.case_type) !== caseTypeKey(form.case_type))
+        .filter((s) => s.id !== editing.id && caseTypeKey(s.case_type) !== caseTypeKey(source.case_type))
         .map((v) => ({
           id: v.id || null,
           case_type: v.case_type,
@@ -788,20 +814,39 @@ export default function AdminTemplateProducts() {
       toast.error("Please select at least one supported phone model");
       return;
     }
+    let formForSave = form;
     const activeGroup = (form.compatibility || []).find(
       (g) => g.brand.toLowerCase() === activeBrandName.toLowerCase()
     );
-    const validModelNames = new Set(brandModels.map((m) => m.name.toLowerCase()));
     if (brandModels.length > 0 && activeGroup?.models?.length > 0) {
-      const invalid = activeGroup.models.filter((m) => !validModelNames.has(String(m).trim().toLowerCase()));
+      const remapped = remapModelsToCatalog(activeGroup.models, brandModels);
+      const invalid = (activeGroup.models || []).filter(
+        (m) => !remapped.some((r) => normalizeModelKey(r) === normalizeModelKey(m))
+      );
       if (invalid.length > 0) {
         toast.error(`The following models are not valid for ${activeBrandName}: ${invalid.join(", ")}`);
         return;
       }
+      // Persist canonical catalog names (e.g. "Pixel 7a" → "Pixel 7 a") before save.
+      if (remapped.join("|") !== (activeGroup.models || []).join("|")) {
+        const nextCompat = (form.compatibility || []).map((g) =>
+          g.brand.toLowerCase() === activeBrandName.toLowerCase()
+            ? { ...g, models: remapped }
+            : g
+        );
+        const allModels = [...new Set(nextCompat.flatMap((g) => g.models || []))];
+        formForSave = {
+          ...form,
+          compatibility: nextCompat,
+          phone_models: allModels,
+          variant_inventory: syncVariantRows(allModels, form.variant_inventory, form.stock),
+        };
+        setForm(formForSave);
+      }
     }
     setSaving(true);
     try {
-      const fd = buildFormData();
+      const fd = buildFormData(formForSave);
       if (editing) {
         if (
           materialForm.case_type &&

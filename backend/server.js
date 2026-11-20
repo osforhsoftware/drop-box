@@ -224,7 +224,7 @@ const DEFAULT_BRANDS = [
   { name: "Vivo", models: ["Vivo V30 Pro", "Vivo X100", "Vivo Y100"] },
   { name: "Oppo", models: ["Oppo Find X7", "Oppo Reno 11", "Oppo A78"] },
   { name: "OnePlus", models: ["OnePlus 12", "OnePlus 11", "OnePlus Nord 3"] },
-  { name: "Google Pixel", models: ["Pixel 8 Pro", "Pixel 8", "Pixel 7a"] },
+  { name: "Google Pixel", models: ["Pixel 8 Pro", "Pixel 8", "Pixel 7 a"] },
 ];
 
 const DEFAULT_PRODUCTS = [
