@@ -75,9 +75,10 @@ const {
   CATEGORIES,
   CASE_TYPES,
   COLLECTIONS,
-  PHONE_BRANDS,
   PRODUCT_TYPES,
   CASE_TYPE_ALIASES,
+  normalizeModelKey,
+  resolveCatalogModelName,
 } = require("./lib/templateProducts");
 const {
   resolveVariantInventory,
@@ -96,6 +97,7 @@ const {
   paginateList,
   findDuplicateCaseType,
   caseTypeKey,
+  pickCanonical,
 } = require("./lib/designGroup");
 const {
   buildCaseTypeLabelMap,
@@ -200,7 +202,7 @@ const {
 const ROOT_DIR = __dirname;
 const UPLOAD_DIR = path.join(ROOT_DIR, "uploads");
 
-for (const sub of ["designs", "payments", "templates", "prints", "popups", "brands", "models", "products", "template-products", "customer-gallery", "hero"]) {
+for (const sub of ["designs", "payments", "templates", "prints", "popups", "brands", "models", "products", "template-products", "customer-gallery", "hero", "categories"]) {
   fs.mkdirSync(path.join(UPLOAD_DIR, sub), { recursive: true });
 }
 ensureGalleryDirs(UPLOAD_DIR);
@@ -218,41 +220,44 @@ let client;
 
 const DEFAULT_BRANDS = [
   { name: "Apple", models: ["iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro", "iPhone 14", "iPhone 13"] },
-  { name: "Akkukkaa", models: ["Akkukkaa", "Akkukkaa Pro"] },
-  { name: "Samsung", models: ["Galaxy S24 Ultra", "Galaxy S24", "Galaxy S23 Ultra", "Galaxy A54", "Galaxy Note 20"] },
-  { name: "Xiaomi", models: ["Xiaomi 14", "Redmi Note 13 Pro", "Poco F5", "Redmi 12"] },
-  { name: "Vivo", models: ["Vivo V30 Pro", "Vivo X100", "Vivo Y100"] },
-  { name: "Oppo", models: ["Oppo Find X7", "Oppo Reno 11", "Oppo A78"] },
-  { name: "OnePlus", models: ["OnePlus 12", "OnePlus 11", "OnePlus Nord 3"] },
   { name: "Google Pixel", models: ["Pixel 8 Pro", "Pixel 8", "Pixel 7 a"] },
+  { name: "Honor", models: ["Honor 200", "Honor X9b"] },
+  { name: "Nothing", models: ["Phone (2)", "Phone (2a)"] },
+  { name: "OnePlus", models: ["OnePlus 12", "OnePlus 11", "OnePlus Nord 3"] },
+  { name: "Oppo", models: ["Oppo Find X7", "Oppo Reno 11", "Oppo A78"] },
+  { name: "POCO", models: ["POCO F5", "POCO X6 Pro"] },
+  { name: "Realme", models: ["Realme GT 6", "Realme 12 Pro"] },
+  { name: "Samsung", models: ["Galaxy S24 Ultra", "Galaxy S24", "Galaxy S23 Ultra", "Galaxy A54", "Galaxy Note 20"] },
+  { name: "Vivo", models: ["Vivo V30 Pro", "Vivo X100", "Vivo Y100"] },
+  { name: "Xiaomi", models: ["Xiaomi 14", "Redmi Note 13 Pro", "Redmi 12"] },
 ];
 
 const DEFAULT_PRODUCTS = [
   {
     name: "Silicone Case",
     slug: "silicone",
-    price: 299.0,
+    default_price: 299.0,
     description: "Crafted from high-grade liquid silicone with a soft microfiber interior lining. Delivers a secure, velvety grip that absorbs everyday drops and bumps, complete with precision cutouts and responsive button covers.",
     material: "Liquid Silicone",
   },
   {
     name: "Transparent Case",
     slug: "transparent",
-    price: 349.0,
+    default_price: 349.0,
     description: "Engineered from optical-grade polycarbonate with anti-yellowing UV resistance and reinforced shock-absorbing edges. Lets your phone's original finish and design show through while guarding against scratches and everyday impact.",
     material: "Polycarbonate",
   },
   {
     name: "Matte Case",
     slug: "matte",
-    price: 399.0,
+    default_price: 399.0,
     description: "Finished with a premium satin matte coating that actively resists fingerprints, oils, and surface smudges. Combines a sleek, low-profile silhouette with smooth tactile grip and durable daily edge protection.",
     material: "Matte Polycarbonate",
   },
   {
     name: "Glass Case",
     slug: "glass",
-    price: 499.0,
+    default_price: 499.0,
     description: "Constructed with a 9H tempered glass backplate and flexible shock-absorbing TPU borders. Features an ultra-smooth glossy surface with high scratch resistance for a clean, luxury look and premium hand feel.",
     material: "Tempered Glass",
   },
@@ -280,6 +285,41 @@ function createToken(userId, email) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+/** Parse optional default_price from form/JSON. Empty → null. Missing → skip. */
+function parseOptionalDefaultPrice(value) {
+  if (value === undefined) return { skip: true };
+  if (value === null) return { value: null };
+  const raw = String(value).trim();
+  if (raw === "") return { value: null };
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num < 0) {
+    return { error: "Default price must be a non-negative number" };
+  }
+  return { value: Math.round(num * 100) / 100 };
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Push case_types.default_price onto matching catalog products (by name/slug). */
+async function syncProductDefaultPriceFromCaseType(caseType) {
+  if (!caseType || !db) return;
+  const name = String(caseType.name || "").trim();
+  const slug = String(caseType.slug || "").trim().toLowerCase();
+  const or = [];
+  if (name) or.push({ name: { $regex: `^${escapeRegex(name)}$`, $options: "i" } });
+  if (slug) {
+    or.push({ slug });
+    or.push({ slug: `${slug}-case` });
+  }
+  if (or.length === 0) return;
+  await db.collection("products").updateMany(
+    { $or: or },
+    { $set: { default_price: caseType.default_price == null ? null : caseType.default_price } }
+  );
 }
 
 function publicUrl(filePath) {
@@ -1571,9 +1611,34 @@ api.get("/postal/pincode/:pincode", getCurrentUser, async (req, res) => {
   }
 });
 
+function caseTypeImageFileExists(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== "string") return false;
+  const rel = imageUrl.replace(/^\/api\/uploads\//, "").replace(/^uploads\//, "");
+  if (!rel || rel.includes("..")) return false;
+  try {
+    return fs.existsSync(path.join(UPLOAD_DIR, rel));
+  } catch {
+    return false;
+  }
+}
+
+function notDeletedCaseTypeClause() {
+  return {
+    $or: [
+      { is_deleted: { $exists: false } },
+      { is_deleted: null },
+      { is_deleted: false },
+    ],
+  };
+}
+
 // --- Case Types / Categories ---
 api.get("/case-types", async (req, res) => {
-  const items = await db.collection("case_types").find({}, { projection: { _id: 0 } }).sort({ order: 1, name: 1 }).toArray();
+  res.set("Cache-Control", "no-store");
+  const items = await db.collection("case_types")
+    .find(notDeletedCaseTypeClause(), { projection: { _id: 0 } })
+    .sort({ order: 1, name: 1 })
+    .toArray();
   res.json(items.map((item) => withRelativeMedia(item, ["image"])));
 });
 
@@ -1585,16 +1650,52 @@ api.post("/admin/case-types", getCurrentAdmin, optionalCatalogUpload("categories
     ? String(req.body.slug).trim()
     : name.toLowerCase().replace(/\s+/g, "-");
 
+  const defaultPrice = parseOptionalDefaultPrice(req.body?.default_price);
+  if (defaultPrice.error) return res.status(400).json({ detail: defaultPrice.error });
+
+  const image = req.file ? `/api/uploads/categories/${req.file.filename}` : null;
+  const order = parseInt(req.body?.order) || 0;
+  const link = String(req.body?.link || `/shop?case_type=${slug}`).trim();
+  const default_price = defaultPrice.skip ? null : defaultPrice.value;
+
+  // Re-adding a previously deleted category should resurrect it in place
+  const softDeleted = await db.collection("case_types").findOne({
+    is_deleted: true,
+    $or: [{ slug }, { name }],
+  });
+  if (softDeleted) {
+    const update = {
+      name,
+      slug,
+      link,
+      order,
+      default_price,
+      is_deleted: false,
+      deleted_at: null,
+      updated_at: nowIso(),
+    };
+    if (image) update.image = image;
+    await db.collection("case_types").updateOne({ id: softDeleted.id }, { $set: update });
+    const saved = await db.collection("case_types").findOne({ id: softDeleted.id }, { projection: { _id: 0 } });
+    await syncProductDefaultPriceFromCaseType(saved);
+    res.set("Cache-Control", "no-store");
+    return res.status(201).json(withRelativeMedia(saved, ["image"]));
+  }
+
   const item = {
     id: crypto.randomUUID(),
     name,
     slug,
-    link: String(req.body?.link || `/shop?case_type=${slug}`).trim(),
-    image: req.file ? `/api/uploads/categories/${req.file.filename}` : null,
-    order: parseInt(req.body?.order) || 0,
+    link,
+    image,
+    order,
+    default_price,
+    is_deleted: false,
     created_at: new Date().toISOString()
   };
   await db.collection("case_types").insertOne(item);
+  await syncProductDefaultPriceFromCaseType(item);
+  res.set("Cache-Control", "no-store");
   res.status(201).json(withRelativeMedia(item, ["image"]));
 });
 
@@ -1607,6 +1708,11 @@ api.patch("/admin/case-types/:id", getCurrentAdmin, optionalCatalogUpload("categ
   if (req.body.slug !== undefined) update.slug = String(req.body.slug).trim();
   if (req.body.link !== undefined) update.link = String(req.body.link).trim();
   if (req.body.order !== undefined) update.order = parseInt(req.body.order) || 0;
+  if (req.body.default_price !== undefined) {
+    const defaultPrice = parseOptionalDefaultPrice(req.body.default_price);
+    if (defaultPrice.error) return res.status(400).json({ detail: defaultPrice.error });
+    update.default_price = defaultPrice.value;
+  }
   if (req.file) {
     update.image = `/api/uploads/categories/${req.file.filename}`;
     if (existing.image) {
@@ -1620,19 +1726,41 @@ api.patch("/admin/case-types/:id", getCurrentAdmin, optionalCatalogUpload("categ
 
   await db.collection("case_types").updateOne({ id: req.params.id }, { $set: update });
   const saved = await db.collection("case_types").findOne({ id: req.params.id }, { projection: { _id: 0 } });
+  if (Object.prototype.hasOwnProperty.call(update, "default_price")
+    || Object.prototype.hasOwnProperty.call(update, "name")
+    || Object.prototype.hasOwnProperty.call(update, "slug")) {
+    await syncProductDefaultPriceFromCaseType(saved);
+  }
   res.json(withRelativeMedia(saved, ["image"]));
 });
 
 api.delete("/admin/case-types/:id", getCurrentAdmin, async (req, res) => {
   const item = await db.collection("case_types").findOne({ id: req.params.id });
-  if (item && item.image) {
+  if (!item) return res.status(404).json({ detail: "Not found" });
+  if (item.is_deleted) return res.json({ ok: true });
+
+  if (item.image) {
     try {
       fs.unlinkSync(path.join(UPLOAD_DIR, item.image.replace("/api/uploads/", "")));
     } catch (e) {
       // ignore
     }
   }
-  await db.collection("case_types").deleteOne({ id: req.params.id });
+
+  // Soft-delete so bootstrap seed cannot resurrect deleted categories,
+  // and all storefront queries filter is_deleted out immediately.
+  await db.collection("case_types").updateOne(
+    { id: req.params.id },
+    {
+      $set: {
+        is_deleted: true,
+        deleted_at: nowIso(),
+        updated_at: nowIso(),
+        image: null,
+      },
+    }
+  );
+  res.set("Cache-Control", "no-store");
   res.json({ ok: true });
 });
 
@@ -1889,12 +2017,15 @@ api.post("/products", getCurrentAdmin, optionalCatalogUpload("products"), async 
   const is_active = req.body?.is_active == null
     ? true
     : String(req.body.is_active).toLowerCase() === "true";
+  const defaultPrice = parseOptionalDefaultPrice(req.body?.default_price);
+  if (defaultPrice.error) return res.status(400).json({ detail: defaultPrice.error });
   const item = {
     id: crypto.randomUUID(),
     name,
     slug,
     description,
     is_active,
+    default_price: defaultPrice.skip ? null : defaultPrice.value,
     image_url: req.file
       ? publicUrl(`uploads/products/${req.file.filename}`)
       : (req.body?.image_url ?? null),
@@ -1920,6 +2051,11 @@ api.patch("/products/:product_id", getCurrentAdmin, optionalCatalogUpload("produ
   }
   if (req.body?.is_active != null) {
     update.is_active = String(req.body.is_active).toLowerCase() === "true";
+  }
+  if (req.body?.default_price !== undefined) {
+    const defaultPrice = parseOptionalDefaultPrice(req.body.default_price);
+    if (defaultPrice.error) return res.status(400).json({ detail: defaultPrice.error });
+    update.default_price = defaultPrice.value;
   }
   if (req.file) {
     deleteCatalogImageFile(existing.image_url, "products");
@@ -2707,18 +2843,46 @@ api.delete("/admin/hero-slides/:id", getCurrentAdmin, async (req, res) => {
 // Public routes use /shop/templates to avoid conflicting with mockup /templates overlay API.
 
 api.get("/shop/templates/meta", async (_req, res) => {
-  const caseTypeDocs = await db.collection("case_types")
-    .find({}, { projection: { _id: 0, slug: 1, name: 1 } })
-    .sort({ order: 1, name: 1 })
-    .toArray();
+  res.set("Cache-Control", "no-store");
+  const shopClause = publishedShopClause();
+  const [caseTypeDocs, brandDocs, categoryVals, collectionVals] = await Promise.all([
+    db.collection("case_types")
+      .find(notDeletedCaseTypeClause(), { projection: { _id: 0, slug: 1, name: 1, order: 1 } })
+      .sort({ order: 1, name: 1 })
+      .toArray(),
+    db.collection("brands")
+      .find({}, { projection: { _id: 0, id: 1, name: 1, slug: 1, logo_url: 1 } })
+      .sort({ name: 1 })
+      .limit(200)
+      .toArray(),
+    db.collection("template_products").distinct("category", shopClause),
+    db.collection("template_products").distinct("collection", shopClause),
+  ]);
+
+  const cleanDistinct = (values, fallback = []) => {
+    const cleaned = [...new Set((values || []).map((v) => String(v || "").trim()).filter(Boolean))];
+    if (cleaned.length > 0) {
+      return cleaned.sort((a, b) => a.localeCompare(b));
+    }
+    return [...fallback];
+  };
+
+  const PRODUCT_TYPE_LABELS = {
+    customized: "Customized Phone Case",
+    original: "Original Phone Case",
+  };
+
   res.json({
-    categories: CATEGORIES,
-    collections: COLLECTIONS,
+    categories: cleanDistinct(categoryVals, CATEGORIES),
+    collections: cleanDistinct(collectionVals, COLLECTIONS),
     case_types: caseTypeDocs.length
-      ? caseTypeDocs.map((c) => ({ slug: c.slug, label: c.name }))
-      : CASE_TYPES.map((slug) => ({ slug, label: slug })),
-    phone_brands: PHONE_BRANDS,
-    product_types: PRODUCT_TYPES,
+      ? caseTypeDocs.map((c) => ({ slug: c.slug, label: c.name, name: c.name }))
+      : CASE_TYPES.map((slug) => ({ slug, label: slug, name: slug })),
+    phone_brands: brandDocs.map((b) => withRelativeMedia(b, ["logo_url"])),
+    product_types: PRODUCT_TYPES.map((slug) => ({
+      slug,
+      label: PRODUCT_TYPE_LABELS[slug] || slug,
+    })),
   });
 });
 
@@ -2834,6 +2998,49 @@ api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
   const sort = req.query.trash === "true"
     ? { trashed_at: -1 }
     : buildSort(req.query);
+  const groupByDesign = req.query.group !== "false" && req.query.trash !== "true";
+
+  // Group linked material variants under one parent row so the admin table
+  // does not show duplicate design titles (pink-case / red-flag / etc.).
+  if (groupByDesign) {
+    const docs = await db.collection("template_products")
+      .find(filter, { projection: { _id: 0 } })
+      .sort(sort)
+      .toArray();
+    const groups = groupProductsForListing(docs);
+    const total = groups.length;
+    const pageGroups = groups.slice(skip, skip + limit);
+    const items = pageGroups.map((group) => {
+      const canonical = pickCanonical(group.members) || group.members[0];
+      const materials = (group.members || []).map((m) => ({
+        id: m.id,
+        case_type: m.case_type,
+        material: m.material || "",
+        price: m.price,
+        sale_price: m.sale_price ?? null,
+        stock: m.stock,
+        status: m.status,
+        is_default: Boolean(m.is_default),
+      }));
+      return {
+        ...canonical,
+        title: displayTemplateTitle(canonical.title),
+        variants: resolveVariantInventory(canonical),
+        design_id: group.design_id || canonical.design_id || null,
+        material_variants: materials,
+        materials_count: materials.length,
+        material_case_types: materials.map((m) => m.case_type).filter(Boolean),
+      };
+    });
+    return res.json({
+      items,
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit) || 1,
+      grouped: true,
+    });
+  }
 
   const [items, total] = await Promise.all([
     db.collection("template_products")
@@ -2860,8 +3067,8 @@ api.get("/admin/template-products", getCurrentAdmin, async (req, res) => {
 
 async function loadAllowedCaseTypeSlugs() {
   const [caseTypeDocs, productDocs] = await Promise.all([
-    db.collection("case_types").find({}, { projection: { slug: 1 } }).toArray(),
-    db.collection("products").find({}, { projection: { slug: 1 } }).toArray(),
+    db.collection("case_types").find(notDeletedCaseTypeClause(), { projection: { slug: 1 } }).toArray(),
+    db.collection("products").find({ is_active: { $ne: false } }, { projection: { slug: 1 } }).toArray(),
   ]);
   return [...new Set([
     ...caseTypeDocs.map((c) => String(c.slug || "").toLowerCase()),
@@ -2882,6 +3089,8 @@ api.post("/admin/template-products", getCurrentAdmin, handleTemplateProductUploa
       allowedCaseTypes,
       allowedBrands: brandDocs,
       allowedModels: modelDocs,
+      // Validate against live brands/models; drop legacy removed models instead of blocking save.
+      stripInvalidModels: true,
     });
     if (parsed.error) return res.status(400).json({ detail: parsed.error });
 
@@ -2934,6 +3143,8 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
       allowedCaseTypes,
       allowedBrands: brandDocs,
       allowedModels: modelDocs,
+      // Live catalog validation; auto-strip models removed from master catalog.
+      stripInvalidModels: true,
     });
     if (parsed.error) return res.status(400).json({ detail: parsed.error });
 
@@ -3011,9 +3222,9 @@ api.put("/admin/template-products/:id", getCurrentAdmin, optionalTemplateProduct
               brand: g.brand,
               models: (g.models || []).filter((m) => matched.phone_models.includes(m)),
             })).filter((g) => g.models.length > 0);
-          } else if (Array.isArray(sibling.compatibility) && sibling.compatibility.length > 0) {
-            sibCompat = sibling.compatibility;
+            if (!sibCompat.length) sibCompat = parsed.compatibility || [];
           } else {
+            // Empty / stripped sibling models → inherit the parent design catalog
             sibCompat = parsed.compatibility || [];
           }
 
@@ -3207,24 +3418,34 @@ api.patch("/admin/template-products/:id/brand-groups/:brand", getCurrentAdmin, a
       }
 
       const brandCatalogModels = modelDocs.filter((m) => m.brand_id === matchedBrand.id);
-      const validModelNames = new Set(brandCatalogModels.map((m) => m.name.toLowerCase()));
-
+      const remappedModels = [];
+      const invalidModels = [];
       for (const m of parsedModels) {
-        if (!validModelNames.has(m.toLowerCase())) {
-          return res.status(400).json({ detail: `Model "${m}" is not a valid model for ${matchedBrand.name}` });
+        const resolved = resolveCatalogModelName(m, brandCatalogModels);
+        if (!resolved) {
+          invalidModels.push(m);
+          continue;
         }
+        if (!remappedModels.some((x) => normalizeModelKey(x) === normalizeModelKey(resolved))) {
+          remappedModels.push(resolved);
+        }
+      }
+      if (invalidModels.length > 0) {
+        return res.status(400).json({
+          detail: `Model "${invalidModels[0]}" is not a valid model for ${matchedBrand.name}`,
+        });
       }
 
       let found = false;
       updatedCompat = existingCompat.map((g) => {
         if (g.brand.toLowerCase() === targetBrand.toLowerCase()) {
           found = true;
-          return { brand: matchedBrand.name, models: parsedModels };
+          return { brand: matchedBrand.name, models: remappedModels };
         }
         return g;
       });
       if (!found) {
-        updatedCompat.push({ brand: matchedBrand.name, models: parsedModels });
+        updatedCompat.push({ brand: matchedBrand.name, models: remappedModels });
       }
     }
 
@@ -5479,6 +5700,14 @@ async function seed() {
         );
       }
     }
+    for (const product of legacyProducts) {
+      if (product.default_price == null && typeof product.price === "number") {
+        await db.collection("products").updateOne(
+          { id: product.id },
+          { $set: { default_price: Number(product.price) } }
+        );
+      }
+    }
     await db.collection("products").updateMany({}, { $unset: { price: "" } });
     await db.collection("brands").updateMany({}, { $unset: { allowed_product_ids: "" } });
     console.log("Migrated global case type prices to phone model pricing");
@@ -5507,7 +5736,7 @@ async function seed() {
     );
   }
 
-  // Ensure standard case types exist and are synchronized
+  // Ensure standard case types exist and are synchronized (never resurrect soft-deleted ones)
   const standardCaseTypes = [
     { name: "Silicone", slug: "silicone", order: 1, image: "/api/uploads/categories/silicone-case.png" },
     { name: "Transparent", slug: "transparent", order: 2 },
@@ -5520,22 +5749,31 @@ async function seed() {
       $or: [{ slug: ct.slug }, { name: ct.name }],
     });
     if (!existingCt) {
+      // Only seed an image path when the file actually exists on disk
+      const seedImage = ct.image && caseTypeImageFileExists(ct.image) ? ct.image : null;
       await db.collection("case_types").insertOne({
         id: crypto.randomUUID(),
         name: ct.name,
         slug: ct.slug,
         link: `/shop?case_type=${ct.slug}`,
-        image: ct.image || null,
+        image: seedImage,
         order: ct.order,
+        is_deleted: false,
         created_at: nowIso(),
       });
+    } else if (existingCt.is_deleted) {
+      // Keep deleted categories deleted — do not re-insert on restart
+      continue;
     } else {
       const updates = {};
       if (existingCt.slug === "test-case-type" && ct.slug === "matte") {
         updates.slug = "matte";
         updates.name = "Matte";
       }
-      if (!existingCt.image && ct.image) {
+      // Clear broken seed/image URLs that point at missing files
+      if (existingCt.image && !caseTypeImageFileExists(existingCt.image)) {
+        updates.image = null;
+      } else if (!existingCt.image && ct.image && caseTypeImageFileExists(ct.image)) {
         updates.image = ct.image;
       }
       if (Object.keys(updates).length > 0) {
@@ -5544,6 +5782,20 @@ async function seed() {
           { $set: updates }
         );
       }
+    }
+  }
+
+  // One-time cleanup: null out any remaining broken category image URLs
+  const allCaseTypes = await db.collection("case_types").find(
+    { image: { $type: "string", $ne: "" } },
+    { projection: { id: 1, image: 1 } }
+  ).toArray();
+  for (const row of allCaseTypes) {
+    if (!caseTypeImageFileExists(row.image)) {
+      await db.collection("case_types").updateOne(
+        { id: row.id },
+        { $set: { image: null, updated_at: nowIso() } }
+      );
     }
   }
 

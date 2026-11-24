@@ -1222,6 +1222,15 @@
 
 }
 
+.brand-logo-marquee {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent);
+    mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent);
+}
+
+.brand-logo-marquee .marquee-track {
+    animation-duration: 32s;
+}
+
 .brand-logo-marquee:hover .marquee-track,
 .brand-logo-marquee:hover .animate-marquee-reverse,
 .brand-logo-slide:hover .marquee-track,

@@ -34,8 +34,12 @@ export default function Shop() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
+  const [brands, setBrands] = useState([]);
   const [models, setModels] = useState([]);
   const [caseTypes, setCaseTypes] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [productTypes, setProductTypes] = useState([]);
   const [mobileFilters, setMobileFilters] = useState(false);
   const [quickView, setQuickView] = useState(null);
   const debounceRef = useRef(null);
@@ -129,9 +133,63 @@ export default function Shop() {
   };
 
   useEffect(() => {
-    api.get("/case-types")
-      .then((response) => setCaseTypes(response.data))
-      .catch(() => setCaseTypes([]));
+    let cancelled = false;
+
+    const applyMeta = (meta) => {
+      if (cancelled || !meta) return;
+      const nextBrands = Array.isArray(meta.phone_brands) ? meta.phone_brands : [];
+      const nextCaseTypes = Array.isArray(meta.case_types)
+        ? meta.case_types.map((c) => ({
+            slug: c.slug,
+            name: c.name || c.label || c.slug,
+            label: c.label || c.name || c.slug,
+          }))
+        : [];
+      setBrands(nextBrands);
+      setCaseTypes(nextCaseTypes);
+      setCategories(Array.isArray(meta.categories) ? meta.categories : []);
+      setCollections(Array.isArray(meta.collections) ? meta.collections : []);
+      setProductTypes(Array.isArray(meta.product_types) ? meta.product_types : []);
+    };
+
+    const loadFilterMeta = async () => {
+      try {
+        const { data } = await api.get("/shop/templates/meta");
+        applyMeta(data);
+      } catch {
+        // Fallback: brands + case types from catalog endpoints if meta fails.
+        try {
+          const [brandsRes, caseTypesRes] = await Promise.all([
+            api.get("/brands"),
+            api.get("/case-types"),
+          ]);
+          if (cancelled) return;
+          setBrands(Array.isArray(brandsRes.data) ? brandsRes.data : []);
+          setCaseTypes(Array.isArray(caseTypesRes.data) ? caseTypesRes.data : []);
+          setCategories([]);
+          setCollections([]);
+          setProductTypes([
+            { slug: "customized", label: "Customized Phone Case" },
+            { slug: "original", label: "Original Phone Case" },
+          ]);
+        } catch {
+          if (!cancelled) {
+            setBrands([]);
+            setCaseTypes([]);
+            setCategories([]);
+            setCollections([]);
+            setProductTypes([]);
+          }
+        }
+      }
+    };
+
+    loadFilterMeta();
+    window.addEventListener("focus", loadFilterMeta);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", loadFilterMeta);
+    };
   }, []);
 
   useEffect(() => {
@@ -139,12 +197,19 @@ export default function Shop() {
       setModels([]);
       return;
     }
-    api.get("/brands").then((brandsRes) => {
-      const brand = brandsRes.data.find((b) => b.name === filters.phone_brand);
-      if (!brand) return;
-      api.get("/models", { params: { brand_id: brand.id } }).then((r) => setModels(r.data));
-    });
-  }, [filters.phone_brand]);
+    const brand = brands.find((b) => (typeof b === "string" ? b : b.name) === filters.phone_brand);
+    if (!brand || typeof brand === "string" || !brand.id) {
+      api.get("/brands").then((brandsRes) => {
+        const match = (brandsRes.data || []).find((b) => b.name === filters.phone_brand);
+        if (!match) return;
+        api.get("/models", { params: { brand_id: match.id } }).then((r) => setModels(r.data));
+      }).catch(() => setModels([]));
+      return;
+    }
+    api.get("/models", { params: { brand_id: brand.id } })
+      .then((r) => setModels(r.data))
+      .catch(() => setModels([]));
+  }, [filters.phone_brand, brands]);
 
   const selectedCaseType = caseTypes.find((type) => type.slug === filters.case_type);
   const selectedCaseTypeName = selectedCaseType?.name
@@ -179,8 +244,12 @@ export default function Shop() {
         <TemplateFilters
           filters={filters}
           onChange={setFilters}
+          brands={brands}
           models={models}
           caseTypes={caseTypes}
+          categories={categories}
+          collections={collections}
+          productTypes={productTypes}
           mobileOpen={mobileFilters}
           onMobileClose={() => setMobileFilters(false)}
         />

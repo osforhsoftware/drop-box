@@ -24,10 +24,12 @@ import {
   ZoomOut,
   Trash2,
   ShoppingBag,
+  Check,
 } from "lucide-react";
 
 import { useCart } from "../lib/cart";
 import { SHIPPING_FEE } from "../constants/shipping";
+import { SHIPPING_INFO } from "../constants/company";
 import {
   CASE_COLOR_OPTIONS,
   DEFAULT_CASE_COLOR_ID,
@@ -362,12 +364,17 @@ function DesignStep({ brand, model, product, onDone }) {
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState(null);
+  const [artworkPreview, setArtworkPreview] = useState(null);
+  const uploadSeqRef = useRef(0);
   const [templateReady, setTemplateReady] = useState(false);
   const [hasTemplate, setHasTemplate] = useState(false);
   const [templateId, setTemplateId] = useState(null);
   const [initError, setInitError] = useState(null);
   const [caseColorId, setCaseColorId] = useState(DEFAULT_CASE_COLOR_ID);
   const [customCaseHex, setCustomCaseHex] = useState("#ffffff");
+  const [specialInstructions, setSpecialInstructions] = useState(
+    () => String(getDraft().notes || "").slice(0, 500)
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -417,6 +424,11 @@ function DesignStep({ brand, model, product, onDone }) {
         console.warn("[Customize] dispose error", e);
       }
       rendererRef.current = null;
+      setArtworkPreview((prev) => {
+        if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+        return null;
+      });
+      setUploadedUrl(null);
     };
     // Re-init only when model/case type changes; color updates via setCaseColor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -435,11 +447,27 @@ function DesignStep({ brand, model, product, onDone }) {
     const renderer = rendererRef.current;
     if (!renderer) return;
 
+    // Only the latest upload wins — replace previous artwork preview + canvas image.
+    const seq = ++uploadSeqRef.current;
+    const localPreview = URL.createObjectURL(file);
+    setArtworkPreview((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return localPreview;
+    });
+    setUploadedUrl(null);
+
     try {
       await renderer.setArtworkFromFile(file);
+      if (seq !== uploadSeqRef.current) return;
     } catch (error) {
       console.error("Failed to load the selected design", error);
-      toast.error("Could not load this image");
+      if (seq === uploadSeqRef.current) {
+        toast.error("Could not load this image");
+        setArtworkPreview((prev) => {
+          if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+          return null;
+        });
+      }
       return;
     }
 
@@ -450,13 +478,15 @@ function DesignStep({ brand, model, product, onDone }) {
       const r = await api.post("/upload/design", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      if (seq !== uploadSeqRef.current) return;
       setUploadedUrl(r.data.url);
       setDraft({ design_url: r.data.url });
+      toast.success("Artwork updated — previous image replaced");
     } catch (e) {
       console.error(e);
-      toast.error("Upload failed");
+      if (seq === uploadSeqRef.current) toast.error("Upload failed");
     } finally {
-      setUploading(false);
+      if (seq === uploadSeqRef.current) setUploading(false);
     }
   };
 
@@ -471,6 +501,11 @@ function DesignStep({ brand, model, product, onDone }) {
   const clearImg = () => {
     rendererRef.current?.clearArtwork();
     setUploadedUrl(null);
+    setArtworkPreview((prev) => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return null;
+    });
+    uploadSeqRef.current += 1;
   };
 
   const currentCaseHex = getCaseColorHex(
@@ -489,6 +524,9 @@ function DesignStep({ brand, model, product, onDone }) {
       const print = renderer?.getPrintPayload() || {};
       const case_color = print.case_color || currentCaseHex;
 
+      const notes = specialInstructions.trim().slice(0, 500) || null;
+      setDraft({ notes });
+
       addToCart({
         template_product_id: null,
         brand: draft.brand,
@@ -499,6 +537,7 @@ function DesignStep({ brand, model, product, onDone }) {
         design_transform: print.design_transform,
         template_id: print.template_id || templateId,
         case_color,
+        notes,
         quantity: 1,
       });
 
@@ -530,6 +569,7 @@ function DesignStep({ brand, model, product, onDone }) {
         brand,
         model,
         product,
+        notes: specialInstructions.trim().slice(0, 500) || null,
       });
       onDone();
     } catch (e) {
@@ -589,7 +629,32 @@ function DesignStep({ brand, model, product, onDone }) {
             {saving && (
               <div className="text-xs text-white/50 mt-2">Saving edited preview…</div>
             )}
+            <p className="text-[11px] text-white/40 mt-2">
+              New uploads replace the previous artwork — only the latest image stays on the case.
+            </p>
           </div>
+
+          {(artworkPreview || uploadedUrl) && (
+            <div>
+              <div className="label-eyebrow mb-3">Your artwork</div>
+              <div className="flex items-center gap-3">
+                <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-brand/50 bg-white/5 shrink-0">
+                  <img
+                    src={artworkPreview || uploadedUrl}
+                    alt="Current artwork"
+                    className="w-full h-full object-cover"
+                  />
+                  <span className="absolute top-1 right-1 w-5 h-5 rounded-full bg-brand text-black grid place-items-center">
+                    <Check className="w-3 h-3 stroke-[3]" />
+                  </span>
+                </div>
+                <div className="min-w-0 text-xs text-white/55">
+                  <div className="text-white/80 font-medium">Active design</div>
+                  <div className="mt-0.5">Upload again anytime to replace this image.</div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="label-eyebrow mb-3">Case color</div>
@@ -697,6 +762,29 @@ function DesignStep({ brand, model, product, onDone }) {
             </div>
           </div>
 
+          <div>
+            <label className="label-eyebrow mb-3 block" htmlFor="special-instructions">
+              Additional message / special instructions
+            </label>
+            <textarea
+              id="special-instructions"
+              data-testid="special-instructions"
+              value={specialInstructions}
+              onChange={(e) => {
+                const next = e.target.value.slice(0, 500);
+                setSpecialInstructions(next);
+                setDraft({ notes: next });
+              }}
+              rows={3}
+              maxLength={500}
+              placeholder="Optional notes for print (placement, text spelling, gift message…)"
+              className="w-full rounded-xl border border-white/15 bg-white/[0.04] px-3 py-2.5 text-sm text-white placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-brand resize-y min-h-[88px]"
+            />
+            <div className="mt-1.5 text-[11px] text-white/35 text-right">
+              {specialInstructions.length}/500
+            </div>
+          </div>
+
           <div className="glass-2 rounded-xl p-4 space-y-2">
             <div className="flex items-center justify-between text-sm text-white/60">
               <span>Product</span>
@@ -711,7 +799,7 @@ function DesignStep({ brand, model, product, onDone }) {
               <div className="font-display text-2xl">₹{product.price + SHIPPING_FEE}</div>
             </div>
             <div className="text-xs text-white/40 text-right">
-              Pan-India delivery · 3–5 days
+              {SHIPPING_INFO.shortNote}
             </div>
           </div>
 

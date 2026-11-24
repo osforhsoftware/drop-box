@@ -1,11 +1,5 @@
 import { X, Search } from "lucide-react";
-import {
-  TEMPLATE_CATEGORIES,
-  TEMPLATE_COLLECTIONS,
-  TEMPLATE_PHONE_BRANDS,
-  TEMPLATE_PRODUCT_TYPES,
-  SORT_OPTIONS,
-} from "../../constants/templateProducts";
+import { SORT_OPTIONS } from "../../constants/templateProducts";
 import FilterSelect from "./FilterSelect";
 
 const EMPTY = {
@@ -25,12 +19,37 @@ const EMPTY = {
 export default function TemplateFilters({
   filters,
   onChange,
+  brands = [],
   models = [],
   caseTypes = [],
+  categories = [],
+  collections = [],
+  productTypes = [],
   mobileOpen,
   onMobileClose,
 }) {
   const set = (k, v) => onChange({ ...filters, [k]: v });
+
+  const brandOptions = brands.map((b) => ({
+    value: typeof b === "string" ? b : b.name,
+    label: typeof b === "string" ? b : b.name,
+  }));
+  const caseTypeOptions = caseTypes.map((c) => ({
+    value: c.slug,
+    label: c.name || c.label || c.slug,
+  }));
+  const productTypeOptions = productTypes.map((t) => ({
+    value: typeof t === "string" ? t : t.slug,
+    label: typeof t === "string" ? t : (t.label || t.slug),
+  }));
+  const categoryOptions = categories.map((c) => ({
+    value: typeof c === "string" ? c : c.name,
+    label: typeof c === "string" ? c : (c.label || c.name),
+  }));
+  const collectionOptions = collections.map((c) => ({
+    value: typeof c === "string" ? c : c.name,
+    label: typeof c === "string" ? c : (c.label || c.name),
+  }));
 
   const content = (
     <div className="space-y-6">
@@ -60,7 +79,7 @@ export default function TemplateFilters({
           allLabel="All brands"
           placeholder="All brands"
           testId="filter-brand"
-          options={TEMPLATE_PHONE_BRANDS.map((b) => ({ value: b, label: b }))}
+          options={brandOptions}
         />
       </FilterGroup>
 
@@ -85,7 +104,8 @@ export default function TemplateFilters({
           allowAll
           allLabel="All types"
           placeholder="All types"
-          options={caseTypes.map((c) => ({ value: c.slug, label: c.name }))}
+          testId="filter-case-type"
+          options={caseTypeOptions}
         />
       </FilterGroup>
 
@@ -97,7 +117,7 @@ export default function TemplateFilters({
           allLabel="All phone cases"
           placeholder="All phone cases"
           testId="filter-product-type"
-          options={TEMPLATE_PRODUCT_TYPES.map((t) => ({ value: t.slug, label: t.label }))}
+          options={productTypeOptions}
         />
       </FilterGroup>
 
@@ -108,7 +128,8 @@ export default function TemplateFilters({
           allowAll
           allLabel="All categories"
           placeholder="All categories"
-          options={TEMPLATE_CATEGORIES.map((c) => ({ value: c, label: c }))}
+          testId="filter-category"
+          options={categoryOptions}
         />
       </FilterGroup>
 
@@ -119,7 +140,8 @@ export default function TemplateFilters({
           allowAll
           allLabel="All collections"
           placeholder="All collections"
-          options={TEMPLATE_COLLECTIONS.map((c) => ({ value: c, label: c }))}
+          testId="filter-collection"
+          options={collectionOptions}
         />
       </FilterGroup>
 

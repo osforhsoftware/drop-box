@@ -26,6 +26,7 @@ export class ArtworkLayer {
 
   place(canvas, img, { sceneW, sceneH, printArea } = {}) {
     if (!canvas || !img) return null;
+    // Always wipe previous user artwork first so a new upload fully replaces the last one.
     this.clear(canvas);
 
     const area = printArea && printArea.width > 0 && printArea.height > 0
@@ -68,8 +69,26 @@ export class ArtworkLayer {
   }
 
   clear(canvas) {
-    if (this.object && canvas) {
-      canvas.remove(this.object);
+    if (canvas) {
+      // Remove every user-artwork object (not only the tracked ref) so overlapping
+      // async uploads cannot leave orphan images stacked on the case.
+      const orphans = (canvas.getObjects?.() || []).filter((obj) => obj?.isUserArtwork);
+      for (const obj of orphans) {
+        try {
+          canvas.remove(obj);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (this.object && !orphans.includes(this.object)) {
+        try {
+          canvas.remove(this.object);
+        } catch {
+          /* ignore */
+        }
+      }
+    } else if (this.object) {
+      // no canvas — still drop the ref
     }
     this.object = null;
     this._initialTransform = null;

@@ -8,6 +8,8 @@ import {
   Truck,
   Shield,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Smartphone,
   ImagePlus,
   Eye,
@@ -19,6 +21,7 @@ import OfferPopup from "../components/OfferPopup";
 import FeaturedTemplatesSlider from "../components/FeaturedTemplatesSlider";
 import CustomerGalleryStrip from "../components/gallery/CustomerGalleryStrip";
 import { BrandLogoMarquee } from "../components/BrandLogos";
+import { SHIPPING_INFO } from "../constants/company";
 
 const STEPS = [
   { n: "01", t: "Choose your phone", d: "Pick brand and exact model.", icon: Smartphone },
@@ -27,48 +30,70 @@ const STEPS = [
   { n: "04", t: "We print & ship", d: "Studio-grade UV printing.", icon: Printer },
 ];
 
+/** Latest process gallery assets — new uploads replace previous step screenshots. */
 const PROCESS_IMAGES = [
   {
-    src: "/images/process-step-choose.jpg",
-    alt: "Choosing a phone model from the selection screen",
-    eyebrow: "Choose your phone",
-    caption: "Pick brand and exact model.",
-  },
-  {
-    src: "/images/process-step-upload.jpg",
-    alt: "Uploading and positioning custom artwork on a phone case",
+    src: "/images/process-gallery-0.png",
+    alt: "CASE BOX custom designer with artwork positioned on an iPhone case",
     eyebrow: "Upload your art",
-    caption: "Turn any idea into a case.",
+    caption: "Drag, zoom, and place your design live.",
+    fit: "contain",
   },
   {
-    src: "/images/process-step-preview.jpg",
-    alt: "3D preview of a custom printed phone case",
-    eyebrow: "Preview & order",
-    caption: "See the finish before ordering.",
+    src: "/images/process-gallery-1.jpg",
+    alt: "CASE BOX unboxing with celestial Astron custom phone case",
+    eyebrow: "Premium unboxing",
+    caption: "Studio print, packaged to impress.",
   },
   {
-    src: "/images/process-step-ship.jpg",
-    alt: "Premium phone case unboxing experience",
-    eyebrow: "We print & ship",
-    caption: "Studio-grade UV printing, delivered.",
+    src: "/images/process-gallery-2.jpg",
+    alt: "CASE BOX unboxing with wanderlust mountain landscape phone case",
+    eyebrow: "Your design, delivered",
+    caption: "See the finish before it ships.",
+  },
+  {
+    src: "/images/process-gallery-3.jpg",
+    alt: "CASE BOX unboxing with green and gold oni mask phone case",
+    eyebrow: "Print & ship",
+    caption: "UV-printed cases, ready to gift.",
   },
 ];
 
 function ProcessTimeline() {
   const trackRef = useRef(null);
+  const pauseUntilRef = useRef(0);
   const [activeCount, setActiveCount] = useState(0);
   const [imageIndex, setImageIndex] = useState(0);
+  const totalImages = PROCESS_IMAGES.length;
+
+  const goTo = (nextIndex, { userDriven = false } = {}) => {
+    if (!totalImages) return;
+    const normalized = ((nextIndex % totalImages) + totalImages) % totalImages;
+    setImageIndex(normalized);
+    if (userDriven) {
+      pauseUntilRef.current = Date.now() + 8000;
+    }
+  };
+
+  const goPrev = () => goTo(imageIndex - 1, { userDriven: true });
+  const goNext = () => goTo(imageIndex + 1, { userDriven: true });
 
   useEffect(() => {
-    if (activeCount > 0) {
-      setImageIndex(Math.min(activeCount - 1, PROCESS_IMAGES.length - 1));
-      return;
-    }
+    if (totalImages <= 1) return undefined;
     const timer = window.setInterval(() => {
-      setImageIndex((current) => (current + 1) % PROCESS_IMAGES.length);
-    }, 3500);
+      if (Date.now() < pauseUntilRef.current) return;
+      setImageIndex((current) => (current + 1) % totalImages);
+    }, 4200);
     return () => window.clearInterval(timer);
-  }, [activeCount]);
+  }, [totalImages]);
+
+  // Keep gallery in sync with scroll progress through the four steps (soft hint, not a hard lock).
+  useEffect(() => {
+    if (activeCount <= 0 || totalImages <= 1) return;
+    if (Date.now() < pauseUntilRef.current) return;
+    const mapped = Math.min(totalImages - 1, Math.max(0, activeCount - 1));
+    setImageIndex((prev) => (prev === mapped ? prev : mapped));
+  }, [activeCount, totalImages]);
 
   const { scrollYProgress } = useScroll({
     target: trackRef,
@@ -82,6 +107,8 @@ function ProcessTimeline() {
     );
     setActiveCount((prev) => (prev === next ? prev : next));
   });
+
+  const activeImage = PROCESS_IMAGES[imageIndex] || PROCESS_IMAGES[0];
 
   return (
     <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 xl:gap-16 items-center">
@@ -168,7 +195,10 @@ function ProcessTimeline() {
         transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
         className="relative lg:sticky lg:top-28"
       >
-        <div className="relative overflow-hidden rounded-2xl aspect-[1/1] sm:aspect-[10/11] lg:aspect-[1/1] bg-[#121212] ring-1 ring-white/[0.06]">
+        <div
+          className="relative overflow-hidden rounded-2xl aspect-[4/5] sm:aspect-[3/4] lg:aspect-[4/5] max-h-[560px] lg:max-h-[640px] w-full bg-[#121212] ring-1 ring-white/[0.06] shadow-[0_24px_60px_-28px_rgba(0,0,0,0.75)]"
+          data-testid="process-image-slider"
+        >
           {PROCESS_IMAGES.map((image, index) => (
             <motion.img
               key={image.src}
@@ -178,37 +208,70 @@ function ProcessTimeline() {
                 opacity: imageIndex === index ? 1 : 0,
                 scale: imageIndex === index ? 1 : 1.04,
               }}
-              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0 h-full w-full object-cover"
-              loading="lazy"
+              transition={{ duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
+              className={`absolute inset-0 h-full w-full object-center ${
+                image.fit === "contain" ? "object-contain p-2 sm:p-3 bg-[#0a0a0a]" : "object-cover"
+              }`}
+              loading={index === 0 ? "eager" : "lazy"}
               decoding="async"
+              draggable={false}
             />
           ))}
+
           <div
-            className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0d0d0d]/70 via-transparent to-[#0d0d0d]/20"
+            className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-black/10"
             aria-hidden
           />
-          <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-5">
+
+          {/* Slider arrows */}
+          {totalImages > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={goPrev}
+                aria-label="Previous process image"
+                data-testid="process-slider-prev"
+                className="absolute left-3 top-1/2 z-20 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition-colors hover:bg-brand hover:text-black hover:border-brand"
+              >
+                <ChevronLeft className="h-5 w-5" strokeWidth={2.25} />
+              </button>
+              <button
+                type="button"
+                onClick={goNext}
+                aria-label="Next process image"
+                data-testid="process-slider-next"
+                className="absolute right-3 top-1/2 z-20 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition-colors hover:bg-brand hover:text-black hover:border-brand"
+              >
+                <ChevronRight className="h-5 w-5" strokeWidth={2.25} />
+              </button>
+            </>
+          )}
+
+          <div className="absolute bottom-0 left-0 right-0 z-10 p-4 sm:p-5 pr-16">
             <motion.div
-              key={imageIndex}
+              key={activeImage.src}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45 }}
+              transition={{ duration: 0.4 }}
             >
               <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-brand-light/90 mb-1.5">
-                {PROCESS_IMAGES[imageIndex].eyebrow}
+                {activeImage.eyebrow}
               </div>
-              <p className="font-display text-lg sm:text-xl text-white/90 leading-snug">
-                {PROCESS_IMAGES[imageIndex].caption}
+              <p className="font-display text-lg sm:text-xl text-white/95 leading-snug">
+                {activeImage.caption}
               </p>
             </motion.div>
           </div>
-          <div className="absolute top-5 right-5 flex gap-1.5" aria-hidden>
+
+          <div className="absolute top-4 right-4 z-10 flex items-center gap-1.5" aria-hidden>
             {PROCESS_IMAGES.map((image, index) => (
-              <span
+              <button
                 key={image.src}
-                className={`h-1 rounded-full transition-all duration-500 ${
-                  imageIndex === index ? "w-6 bg-brand-light" : "w-1.5 bg-white/35"
+                type="button"
+                aria-label={`Show image ${index + 1}`}
+                onClick={() => goTo(index, { userDriven: true })}
+                className={`h-1.5 rounded-full transition-all duration-500 ${
+                  imageIndex === index ? "w-6 bg-brand-light" : "w-1.5 bg-white/35 hover:bg-white/55"
                 }`}
               />
             ))}
@@ -221,8 +284,8 @@ function ProcessTimeline() {
 
 const FAQ = [
   { q: "Can I buy a pre-designed case without uploading art?", a: "Yes — browse our Shop for ready-made templates. Pick your phone model and checkout in minutes." },
-  { q: "How long does shipping take?", a: "Most orders ship within 24–48 hours and arrive in 3–5 business days across India. Flat ₹80 shipping on all orders." },
-  { q: "What phones do you support?", a: "Apple, Akkukkaa, Samsung, Xiaomi, OnePlus, Vivo, Oppo, Google Pixel, Motorola, Nokia, Sony, Huawei, Honor, ASUS, Lenovo, Realme, Nothing, iQOO, and more flagship models." },
+  { q: "How long does shipping take?", a: `${SHIPPING_INFO.deliveryNote} ${SHIPPING_INFO.feeNote}` },
+  { q: "What phones do you support?", a: "We support every brand and model listed in our live catalog. Pick your device in Shop or Custom Designer — new brands appear automatically when we add them." },
   { q: "Can I still design my own case?", a: "Absolutely. The custom designer works alongside our template shop — use whichever fits your style." },
 ];
 
@@ -295,9 +358,9 @@ export default function Home() {
       <OfferPopup />
       <VideoHero />
 
-      <ShopByCategory />
-
       <BrandLogoMarquee />
+
+      <ShopByCategory />
 
       <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
         <HomePromoCard item={STUDIO_PROMO} />
@@ -334,11 +397,12 @@ export default function Home() {
           </div>
           <div className="w-full flex justify-center lg:justify-end">
             <img
-              src="/images/phone_brands_casebox.webp"
-              alt="Supported phone brands including Apple, Akkukkaa, Samsung, Xiaomi, and more"
-              className="w-full max-w-sm sm:max-w-md lg:max-w-full h-auto object-contain"
+              src="/images/phone_brands_casebox.jpg"
+              alt="Supported phone brands"
+              className="w-full max-w-md rounded-2xl bg-white object-contain shadow-sm border border-black/[0.06]"
               loading="lazy"
               decoding="async"
+              data-testid="brand-logo-grid"
             />
           </div>
         </div>
@@ -396,7 +460,7 @@ export default function Home() {
         {[
           { i: Zap, t: "Studio-grade UV print", d: "1200dpi vibrant output" },
           { i: Shield, t: "Drop-tested shell", d: "Military-grade protection" },
-          { i: Truck, t: "Pan-India shipping", d: "Flat ₹80 · delivered in 3–5 days" },
+          { i: Truck, t: "Pan-India shipping", d: SHIPPING_INFO.bannerNote },
         ].map(({ i: Icon, t, d }, k) => (
           <div key={k} className="glass-2 rounded-2xl p-6 flex items-start gap-4">
             <div className="w-10 h-10 rounded-lg bg-brand/15 border border-brand/30 grid place-items-center">

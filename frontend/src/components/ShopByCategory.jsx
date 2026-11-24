@@ -3,9 +3,14 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, resolveMediaUrl } from "../lib/api";
 
+function hasUsableCategoryImage(cat) {
+  return Boolean(cat?.image && String(cat.image).trim());
+}
+
 export default function ShopByCategory() {
   const scrollRef = useRef(null);
   const [categories, setCategories] = useState([]);
+  const [brokenIds, setBrokenIds] = useState(() => new Set());
   const [showLeft, setShowLeft] = useState(false);
   const [showRight, setShowRight] = useState(true);
 
@@ -17,14 +22,22 @@ export default function ShopByCategory() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await api.get("/case-types");
-        setCategories(res.data);
+        const res = await api.get("/case-types", {
+          headers: { "Cache-Control": "no-cache" },
+          params: { _ts: Date.now() },
+        });
+        const list = Array.isArray(res.data) ? res.data : [];
+        // Soft-deleted rows are already filtered by the API; also skip blank/broken assets.
+        setCategories(list.filter(hasUsableCategoryImage));
+        setBrokenIds(new Set());
       } catch (err) {
         console.error("Failed to load case types", err);
       }
     }
     load();
   }, []);
+
+  const visibleCategories = categories.filter((cat) => !brokenIds.has(cat.id));
 
   const checkScroll = () => {
     if (!scrollRef.current) return;
@@ -37,7 +50,7 @@ export default function ShopByCategory() {
     checkScroll();
     window.addEventListener("resize", checkScroll);
     return () => window.removeEventListener("resize", checkScroll);
-  }, [categories]);
+  }, [visibleCategories]);
 
   const handleScroll = () => {
     checkScroll();
@@ -81,7 +94,16 @@ export default function ShopByCategory() {
     scrollRef.current.scrollLeft = scrollLeftStart.current - walk;
   };
 
-  if (!categories || categories.length === 0) return null;
+  const markBroken = (id) => {
+    setBrokenIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  if (!visibleCategories || visibleCategories.length === 0) return null;
 
   return (
     <section className="py-16 sm:py-20">
@@ -127,7 +149,7 @@ export default function ShopByCategory() {
               cursor: 'grab' 
             }}
           >
-            {categories.map((cat) => (
+            {visibleCategories.map((cat) => (
               <Link
                 key={cat.id}
                 to={`/shop?case_type=${encodeURIComponent(cat.slug)}`}
@@ -135,14 +157,13 @@ export default function ShopByCategory() {
                 className="snap-start shrink-0 flex flex-col items-center gap-3 w-[100px] sm:w-[120px] md:w-[132px] group/card"
               >
                 <div className="w-[92px] h-[92px] sm:w-[112px] sm:h-[112px] md:w-[124px] md:h-[124px] bg-[#f4f6f2] rounded-2xl shadow-sm flex items-center justify-center p-3 transition-all duration-500 ease-out group-hover/card:-translate-y-1 group-hover/card:shadow-[0_18px_35px_rgba(0,0,0,.3)] pointer-events-none overflow-hidden">
-                  {cat.image && (
-                    <img
-                      src={resolveMediaUrl(cat.image)}
-                      alt={cat.name}
-                      className="w-full h-full object-contain drop-shadow-md transition-transform duration-500 group-hover/card:scale-105"
-                      draggable={false}
-                    />
-                  )}
+                  <img
+                    src={resolveMediaUrl(cat.image)}
+                    alt={cat.name}
+                    className="w-full h-full object-contain drop-shadow-md transition-transform duration-500 group-hover/card:scale-105"
+                    draggable={false}
+                    onError={() => markBroken(cat.id)}
+                  />
                 </div>
                 <span className="text-xs sm:text-sm font-medium text-white/85 text-center pointer-events-none">
                   {cat.name}

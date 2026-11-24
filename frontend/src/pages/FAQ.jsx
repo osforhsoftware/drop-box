@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown, HelpCircle } from "lucide-react";
+import { ChevronDown, HelpCircle, MessageCircle } from "lucide-react";
 import { COMPANY_NAME, CONTACT } from "../constants/company";
 import { FAQ_ITEMS } from "../constants/policies";
+
+const WA_HREF = `https://wa.me/${CONTACT.whatsapp.digits}?text=${encodeURIComponent(
+  CONTACT.whatsapp.supportText || CONTACT.whatsapp.enquiryText
+)}`;
 
 function FaqItem({ question, answer, isOpen, onToggle }) {
   return (
@@ -38,6 +42,32 @@ export default function FAQ() {
         <p className="mt-4 text-white/60 leading-relaxed">
           Quick answers about ordering, customization, payment, and shipping at {COMPANY_NAME}.
         </p>
+        <p className="mt-2 text-sm text-white/45">
+          Support: <span className="text-white/70">{CONTACT.supportHours}</span>
+        </p>
+      </section>
+
+      <section className="max-w-3xl mx-auto px-6 lg:px-10 pb-6">
+        <a
+          href={WA_HREF}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="faq-whatsapp-support"
+          className="glass rounded-2xl p-6 lg:p-7 flex flex-col sm:flex-row items-start sm:items-center gap-4 border border-[#25D366]/25 hover:border-[#25D366]/45 transition-colors group"
+        >
+          <div className="w-12 h-12 rounded-xl bg-[#25D366]/15 border border-[#25D366]/35 grid place-items-center shrink-0">
+            <MessageCircle className="w-6 h-6 text-[#25D366]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-white">WhatsApp Support</div>
+            <p className="text-sm text-white/55 mt-1">
+              Chat with us anytime — {CONTACT.supportHours}. Tap to open WhatsApp.
+            </p>
+          </div>
+          <span className="shrink-0 inline-flex items-center justify-center rounded-full bg-[#25D366] text-white px-5 py-2.5 text-sm font-semibold group-hover:brightness-110 transition">
+            Message us
+          </span>
+        </a>
       </section>
 
       <section className="max-w-3xl mx-auto px-6 lg:px-10 pb-10 space-y-3">
@@ -60,7 +90,7 @@ export default function FAQ() {
           <div className="flex-1">
             <div className="font-medium">Still have questions?</div>
             <p className="text-sm text-white/55 mt-1">
-              Message us on Instagram at {CONTACT.instagram.handle} or use our contact form.
+              Message us on Instagram at {CONTACT.instagram.handle}, email {CONTACT.email}, or use our contact form.
             </p>
           </div>
           <Link to="/contact" className="btn-secondary shrink-0">

@@ -50,8 +50,13 @@ export const SHIPPING_INFO = {
   coverage: "All Over India",
   fulfillment:
     "Review available materials via story highlights, place your custom design requests via direct messaging or order forms, and receive proof mockups before printing.",
+  /** Flat minimum shipping charge shown across product pages, banners, and cart. */
   feeNote: "Flat ₹80 shipping on all orders across India.",
   deliveryNote: "Most orders ship within 24–48 hours and arrive in 3–5 business days.",
+  /** Compact banner / feature-bar copy (use instead of hardcoded strings). */
+  bannerNote: "Flat ₹80 · delivered in 3–5 days",
+  shortNote: "Pan-India delivery · 3–5 days",
+  trackedNote: "Tracked shipping in 3–5 days",
 };
 
 export const BRAND_AESTHETIC = {
@@ -62,12 +67,13 @@ export const BRAND_AESTHETIC = {
 };
 
 export const CONTACT = {
-  email: "hello@casebox.studio",
+  email: "thecaseboxstore@gmail.com",
   whatsapp: {
     number: "+918137953532",
     /** Digits only for wa.me links */
     digits: "918137953532",
     enquiryText: "Hi CASEBOX! I'd like to enquire about a custom case.",
+    supportText: "Hi CASEBOX! I need help from the FAQ page.",
   },
   instagram: {
     handle: "@casebox._",
@@ -75,8 +81,8 @@ export const CONTACT = {
   },
   primaryChannel:
     "Message us directly on Instagram for orders, custom queries, and support.",
-  responseTime: "We typically respond within 24 hours on weekdays.",
-  supportHours: "Mon–Sat, 10:00 AM – 7:00 PM IST",
+  responseTime: "We respond around the clock — usually within a few hours.",
+  supportHours: "24 Hours Support (24/7)",
 };
 
 export const CONTACT_SUBJECTS = [

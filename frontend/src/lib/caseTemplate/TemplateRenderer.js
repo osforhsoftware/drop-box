@@ -211,12 +211,23 @@ export class TemplateRenderer {
 
   async setArtworkFromDataUrl(dataUrl) {
     if (!this.canvas) return null;
+    // Serialize placements so a slower previous upload cannot re-add after a newer one.
+    const runId = (this._artworkPlaceSeq = (this._artworkPlaceSeq || 0) + 1);
+    // Clear immediately so the UI shows replace (not stack) while the new image loads.
+    this.artwork.clear(this.canvas);
+    this.restack();
+    this.canvas.requestRenderAll();
+
     const { w, h } = this.viewport.getSceneSize(this.canvas);
     await this.artwork.placeFromDataUrl(this.canvas, dataUrl, {
       sceneW: w,
       sceneH: h,
       printArea: this.printArea,
     });
+    if (runId !== this._artworkPlaceSeq) {
+      // A newer upload started — drop this stale placement.
+      return null;
+    }
     this.restack();
     this.canvas.requestRenderAll();
     return this.artwork.object;

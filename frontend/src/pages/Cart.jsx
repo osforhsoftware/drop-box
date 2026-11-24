@@ -6,6 +6,7 @@ import { resolveMediaUrl } from "../lib/api";
 import { replaceDraft } from "../lib/draft";
 import { formatPrice, isModelOutOfStock, materialLabel, maxPurchasableQuantity } from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
+import { SHIPPING_INFO } from "../constants/company";
 
 export default function Cart() {
   const { cartItems, updateQuantity, removeFromCart } = useCart();
@@ -32,9 +33,14 @@ export default function Cart() {
     const itemsToCheckout = cartItems.filter((i) => selectedItems[i.cart_id]);
     if (itemsToCheckout.length === 0) return;
 
+    const notes = itemsToCheckout
+      .map((i) => String(i?.notes || "").trim())
+      .filter(Boolean)
+      .join("\n") || null;
     replaceDraft({
       source: "cart",
       items: itemsToCheckout,
+      notes,
     });
     navigate("/checkout");
   };
@@ -179,6 +185,7 @@ export default function Cart() {
                 <span>Shipping</span>
                 <span>{formatPrice(SHIPPING_FEE)}</span>
               </div>
+              <p className="text-xs text-white/40">{SHIPPING_INFO.bannerNote}</p>
               <div className="border-t border-white/10 pt-4 flex justify-between font-medium text-lg text-white">
                 <span>Total</span>
                 <span>{formatPrice(total)}</span>

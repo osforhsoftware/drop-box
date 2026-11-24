@@ -41,7 +41,7 @@ test("catalogCompatibility: parseFormFields validates brand and models against c
       { allowedBrands, allowedModels: appleModels }
     );
     assert.ok(res.error);
-    assert.match(res.error, /Model "Galaxy S24 Ultra" is not a valid model for Apple/);
+    assert.match(res.error, /not valid for Apple.*Galaxy S24 Ultra|Galaxy S24 Ultra.*not (a )?valid model for Apple/i);
   });
 
   await t.test("accepts valid phone brand and compatible catalog models", () => {
@@ -111,7 +111,7 @@ test("catalogCompatibility: parseFormFields validates brand and models against c
     );
 
     assert.ok(res.error);
-    assert.match(res.error, /Model "Galaxy S24 Ultra" is not a valid model for Apple/);
+    assert.match(res.error, /not valid for Apple.*Galaxy S24 Ultra|Galaxy S24 Ultra.*not (a )?valid model for Apple/i);
   });
 
   await t.test("deduplicates duplicate brand groups and models in compatibility", () => {

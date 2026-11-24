@@ -20,12 +20,13 @@ import {
   getModelPrice,
 } from "../constants/templateProducts";
 import { SHIPPING_FEE } from "../constants/shipping";
+import { SHIPPING_INFO } from "../constants/company";
 import { partitionTags } from "../constants/colorSwatch";
 import { ColorSwatchGroup } from "../components/ColorSwatch";
 import { useCart } from "../lib/cart";
 import { toast } from "sonner";
 import TemplateProductCard from "../components/TemplateProductCard";
-import FilterSelect from "../components/templates/FilterSelect";
+import SearchableSelect from "../components/templates/SearchableSelect";
 
 export default function TemplateDetail() {
   const { slug } = useParams();
@@ -243,8 +244,28 @@ export default function TemplateDetail() {
     isMaterialInStock(m, selectedModel?.name)
   );
 
-  const showMaterialSelector = activeInStockMaterials.length > 1;
+  const showMaterialSelector = compatibleMaterials.length > 0;
   const noCompatibleMaterial = Boolean(selectedModel && compatibleMaterials.length === 0);
+
+  const designCompat = getDesignCompatibility(template);
+  const compatBrandCount = designCompat.length
+    || (Array.isArray(template?.compatibility) ? template.compatibility.length : 0)
+    || (template?.phone_brand ? 1 : 0);
+  const compatModelCount = designCompat.reduce(
+    (n, group) => n + (Array.isArray(group.models) ? group.models.length : 0),
+    0
+  ) || (Array.isArray(template?.phone_models) ? template.phone_models.length : 0);
+  const compatibleModelsSummary = (() => {
+    if (compatBrandCount > 1) {
+      return compatModelCount > 0
+        ? `Available across ${compatBrandCount} brands · ${compatModelCount} models`
+        : `Available across ${compatBrandCount} brands`;
+    }
+    if (compatModelCount > 0) {
+      return `Available for ${compatModelCount} model${compatModelCount === 1 ? "" : "s"}`;
+    }
+    return null;
+  })();
 
   // Auto-select valid compatible and in-stock material when brand or model changes
   useEffect(() => {
@@ -699,7 +720,7 @@ export default function TemplateDetail() {
           </div>
 
           <p className="text-sm text-white/50 mt-2">
-            + {formatPrice(SHIPPING_FEE)} shipping · Total {formatPrice(price + SHIPPING_FEE)}
+            + {formatPrice(SHIPPING_FEE)} shipping · {SHIPPING_INFO.shortNote} · Total {formatPrice(price + SHIPPING_FEE)}
           </p>
 
           <p
@@ -709,102 +730,45 @@ export default function TemplateDetail() {
             {displayDescription}
           </p>
 
-          {/* Material selector - positioned neatly above Specifications, close to price & description */}
+          {/* Material selector — dropdown tied to case-type pricing */}
           {showMaterialSelector && (
             <div className="pt-1 space-y-2.5" data-testid="material-select">
-              <div className="flex items-center justify-between">
-                <label className="text-xs text-white/50 block font-medium uppercase tracking-wider">
-                  Select case material
-                </label>
-                {selectedVariant && (
-                  <span className="text-xs font-mono text-brand font-medium" data-testid="selected-material-label">
-                    {selectedVariant.case_type_label || caseTypeLabel(selectedVariant.case_type)}
-                  </span>
-                )}
-              </div>
-
-              <div
-                role="radiogroup"
-                aria-label="Select case material"
-                className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5"
-              >
-                {compatibleMaterials.map((m) => {
-                  const isSelected = selectedVariant?.id === m.id || selectedVariant?.case_type === m.case_type;
+              <label className="text-xs text-white/50 block font-medium uppercase tracking-wider">
+                Select case material
+              </label>
+              <SearchableSelect
+                value={selectedVariant?.id || selectedMaterialId}
+                onChange={(nextId) => {
+                  const next = compatibleMaterials.find((m) => m.id === nextId);
+                  if (next) handleMaterialSelect(next);
+                }}
+                placeholder="Select case material"
+                searchPlaceholder="Search materials…"
+                emptyLabel="No materials available."
+                testId="detail-material-select"
+                options={compatibleMaterials.map((m) => {
                   const matPricing = getModelPrice(m, selectedModel?.name);
                   const matPrice = matPricing.effective_price;
                   const matLabel = m.case_type_label || caseTypeLabel(m.case_type);
                   const isOut = selectedModel
                     ? isModelOutOfStock(m, selectedModel.name)
                     : (m.stock != null && Number(m.stock) <= 0);
-                  return (
-                    <button
-                      key={m.id || m.case_type}
-                      type="button"
-                      role="radio"
-                      aria-checked={isSelected}
-                      aria-disabled={isOut}
-                      tabIndex={0}
-                      data-testid={`material-option-${m.case_type || m.id}`}
-                      onClick={() => handleMaterialSelect(m)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleMaterialSelect(m);
-                        }
-                      }}
-                      className={`group relative text-left p-2.5 sm:p-3 rounded-xl border transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand flex flex-col justify-between gap-1.5 ${
-                        isSelected
-                          ? "bg-brand/15 border-brand ring-1 ring-brand text-white shadow-[0_0_12px_rgba(109,177,97,0.18)]"
-                          : isOut
-                          ? "bg-white/[0.01] border-white/5 text-white/40 opacity-60"
-                          : "bg-white/[0.03] border-white/10 hover:border-white/20 hover:bg-white/[0.06] text-white/80"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-1 w-full">
-                        <span
-                          className={`text-xs sm:text-sm font-medium leading-tight line-clamp-1 ${
-                            isSelected ? "text-white" : "text-white/90"
-                          }`}
-                          title={matLabel}
-                        >
-                          {matLabel}
-                        </span>
-                        <span
-                          className={`w-3.5 h-3.5 rounded-full border shrink-0 mt-0.5 flex items-center justify-center transition-colors ${
-                            isSelected
-                              ? "border-brand bg-brand"
-                              : "border-white/30 group-hover:border-white/50"
-                          }`}
-                        >
-                          {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
-                        </span>
-                      </div>
-                      <div className="flex items-baseline justify-between w-full mt-0.5">
-                        <span
-                          className={`font-mono text-xs font-semibold ${
-                            isSelected ? "text-brand" : "text-brand/90"
-                          }`}
-                        >
-                          {formatPrice(matPrice)}
-                        </span>
-                        {isOut && (
-                          <span className="text-[10px] text-amber-400 font-medium">Out of stock</span>
-                        )}
-                      </div>
-                    </button>
-                  );
+                  return {
+                    value: m.id,
+                    label: isOut ? `${matLabel} (Out of stock)` : matLabel,
+                    searchText: m.case_type || "",
+                    meta: formatPrice(matPrice),
+                    testId: `material-option-${m.case_type || m.id}`,
+                  };
                 })}
-              </div>
-            </div>
-          )}
-
-          {!showMaterialSelector && compatibleMaterials.length >= 1 && (
-            <div className="pt-0.5 flex items-center gap-2 text-xs text-white/70" data-testid="single-material-info">
-              <span className="text-white/40 uppercase tracking-wider font-medium text-[11px]">Material:</span>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-white font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-brand" />
-                {selectedMaterialLabel} · {formatPrice(currentPrice)}
-              </span>
+              />
+              {selectedVariant && (
+                <p className="text-xs text-white/50" data-testid="selected-material-label">
+                  {selectedVariant.case_type_label || caseTypeLabel(selectedVariant.case_type)}
+                  {" · "}
+                  <span className="font-mono text-brand font-medium">{formatPrice(currentPrice)}</span>
+                </p>
+              )}
             </div>
           )}
 
@@ -828,9 +792,11 @@ export default function TemplateDetail() {
               <div>
                 <dt className="text-white/40 text-xs uppercase tracking-wider">Brand</dt>
                 <dd>
-                  {Array.isArray(template.compatibility) && template.compatibility.length > 0
-                    ? template.compatibility.map((c) => c.brand).join(", ")
-                    : template.phone_brand}
+                  {designCompat.length > 3
+                    ? `${designCompat.length} brands`
+                    : designCompat.length > 0
+                      ? designCompat.map((c) => c.brand).join(", ")
+                      : template.phone_brand}
                 </dd>
               </div>
               <div>
@@ -845,10 +811,10 @@ export default function TemplateDetail() {
                   </dd>
                 </div>
               )}
-              {Array.isArray(template.phone_models) && template.phone_models.length > 0 && (
+              {compatibleModelsSummary && (
                 <div className="col-span-2">
                   <dt className="text-white/40 text-xs uppercase tracking-wider">Compatible models</dt>
-                  <dd>{(activeTemplate?.phone_models || template.phone_models || []).join(", ")}</dd>
+                  <dd data-testid="compatible-models-summary">{compatibleModelsSummary}</dd>
                 </div>
               )}
             </dl>
@@ -861,20 +827,24 @@ export default function TemplateDetail() {
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs text-white/50 mb-1.5 block">Brand</label>
-                    <FilterSelect
+                    <SearchableSelect
                       value={brandId}
                       onChange={handleBrandChange}
                       placeholder="Select brand"
+                      searchPlaceholder="Search brands…"
+                      emptyLabel="No brands found."
                       options={brands.map((b) => ({ value: b.id, label: b.name }))}
                       testId="detail-brand-select"
                     />
                   </div>
                   <div>
                     <label className="text-xs text-white/50 mb-1.5 block">Model</label>
-                    <FilterSelect
+                    <SearchableSelect
                       value={modelId}
                       onChange={handleModelChange}
                       placeholder={brandId ? "Select model" : "Select brand first"}
+                      searchPlaceholder="Search models…"
+                      emptyLabel="No models found."
                       options={models.map((m) => ({
                         value: m.id,
                         label: activeTemplate && isModelOutOfStock(activeTemplate, m.name)

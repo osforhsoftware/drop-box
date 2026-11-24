@@ -122,7 +122,7 @@ export default function OrderDetailsModal({
                   )}
                   <Info l="State" v={selected.state} />
                   <Info l="Pincode" v={selected.pincode} />
-                  <Info l="Notes" v={selected.notes || "—"} />
+                  <Info l="Special instructions" v={selected.notes || "—"} />
                 </Section>
 
                 <Section title="Tracking information">

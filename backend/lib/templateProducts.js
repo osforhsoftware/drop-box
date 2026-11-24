@@ -32,9 +32,8 @@ const COLLECTIONS = [
   "Essentials", "Limited Edition", "Artist Series", "Seasonal", "Collab",
 ];
 
-const PHONE_BRANDS = [
-  "Apple", "Akkukkaa", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
-];
+/** @deprecated Prefer live brands from the `brands` collection /admin/catalog. */
+const PHONE_BRANDS = [];
 
 /** Shop listing type: pre-designed art vs blank/original case (customizable). */
 const PRODUCT_TYPES = ["customized", "original"];
@@ -121,6 +120,25 @@ function resolveCatalogModelName(name, catalogModels = []) {
   );
   if (!exact) return null;
   return String(typeof exact === "string" ? exact : exact.name).trim() || null;
+}
+
+/**
+ * Remap known models onto catalog names while keeping unknown (legacy) names.
+ * Used by admin UI so removed catalog models stay visible as invalid chips.
+ */
+function canonicalizeModelsKeepingUnknown(selectedNames = [], catalogModels = []) {
+  const next = [];
+  const seen = new Set();
+  for (const raw of selectedNames || []) {
+    const resolved = resolveCatalogModelName(raw, catalogModels);
+    const name = resolved || String(raw || "").trim();
+    if (!name) continue;
+    const key = normalizeModelKey(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push(name);
+  }
+  return next;
 }
 
 function parseNumber(val, fallback = null) {
@@ -419,6 +437,7 @@ function parseCompatibility(rawCompatibility, rawBrand, rawModels, options = {})
 
   const allowedBrands = options.allowedBrands;
   const allowedModels = options.allowedModels;
+  const strippedInvalid = [];
 
   if (Array.isArray(allowedBrands) && allowedBrands.length > 0) {
     for (const group of normalizedGroups) {
@@ -426,6 +445,11 @@ function parseCompatibility(rawCompatibility, rawBrand, rawModels, options = {})
         (b) => b.name?.toLowerCase() === group.brand.toLowerCase() || b.id === group.brand
       );
       if (!matchedBrand) {
+        if (options.stripInvalidModels) {
+          strippedInvalid.push({ brand: group.brand, models: group.models || [] });
+          group.models = [];
+          continue;
+        }
         return { error: `Brand "${group.brand}" is not in the catalog` };
       }
       group.brand = matchedBrand.name;
@@ -467,17 +491,31 @@ function parseCompatibility(rawCompatibility, rawBrand, rawModels, options = {})
             remapped.push(resolved);
           }
         }
-        if (invalid.length > 0) {
+        if (invalid.length > 0 && !options.stripInvalidModels) {
           return {
             error: `The following models are not valid for ${group.brand}: ${invalid.join(", ")}`,
           };
+        }
+        if (invalid.length > 0) {
+          strippedInvalid.push({ brand: group.brand, models: invalid });
         }
         group.models = remapped;
       }
     }
   }
 
-  return { value: normalizedGroups };
+  // Drop brand groups that lost every model after stripping (unless brand alone was intentional with empty models)
+  const finalGroups = options.stripInvalidModels
+    ? normalizedGroups.filter((g) => (g.models || []).length > 0)
+    : normalizedGroups;
+  if (!finalGroups.length) {
+    return { error: "Phone brand is required" };
+  }
+
+  return {
+    value: finalGroups,
+    ...(strippedInvalid.length ? { strippedInvalid } : {}),
+  };
 }
 
 
@@ -533,10 +571,25 @@ function parseMaterialVariants(rawVariants, options = {}, primaryCaseType = "") 
     }
 
     let compatibility = [];
-    if (item.compatibility) {
+    const hasCompatPayload = item.compatibility != null && item.compatibility !== ""
+      && !(Array.isArray(item.compatibility) && item.compatibility.length === 0);
+    if (hasCompatPayload) {
       const compatRes = parseCompatibility(item.compatibility, item.phone_brand, phone_models, options);
-      if (compatRes.error) return { error: compatRes.error };
-      compatibility = compatRes.value;
+      if (compatRes.error) {
+        // When stripping legacy models, an empty leftover group means "inherit parent" — not a hard failure.
+        if (options.stripInvalidModels && /Phone brand is required/i.test(compatRes.error)) {
+          compatibility = [];
+          phone_models = [];
+        } else {
+          return { error: compatRes.error };
+        }
+      } else {
+        compatibility = compatRes.value;
+        if (options.stripInvalidModels && (!compatibility || compatibility.length === 0)) {
+          compatibility = [];
+          phone_models = [];
+        }
+      }
     }
 
     let effStock = stock;
@@ -948,6 +1001,7 @@ module.exports = {
   parsePhoneModels,
   normalizeModelKey,
   resolveCatalogModelName,
+  canonicalizeModelsKeepingUnknown,
   buildListFilter,
   buildAdminListFilter,
   buildSort,

@@ -4,7 +4,6 @@ import { api, resolveMediaUrl } from "../../lib/api";
 import {
   TEMPLATE_CATEGORIES,
   TEMPLATE_COLLECTIONS,
-  TEMPLATE_PHONE_BRANDS,
   TEMPLATE_PRODUCT_TYPES,
   formatPrice,
   displayTemplateTitle,
@@ -16,6 +15,9 @@ import {
   getDesignCompatibility,
   normalizeModelKey,
   remapModelsToCatalog,
+  canonicalizeModelsKeepingUnknown,
+  findInvalidSelectedModels,
+  caseTypeLabel,
 } from "../../constants/templateProducts";
 import {
   Plus, Trash2, Pencil, Copy, Star, Eye, EyeOff, Globe, Search, X, Check, RotateCcw,
@@ -299,7 +301,7 @@ export default function AdminTemplateProducts() {
       const res = await api.get("/models", { params: { brand_id: matched.id } });
       const mList = Array.isArray(res.data) ? res.data : [];
       setBrandModels(mList);
-      // Remap any stale/spacing-mismatched selections onto current catalog names.
+      // Canonicalize spacing/name matches but KEEP unknown legacy models so chips can show red.
       setForm((prev) => {
         const brandKey = String(brandName || "").trim().toLowerCase();
         if (!brandKey) return prev;
@@ -307,7 +309,7 @@ export default function AdminTemplateProducts() {
         let changed = false;
         const nextCompat = currentCompat.map((g) => {
           if (g.brand.toLowerCase() !== brandKey) return g;
-          const remapped = remapModelsToCatalog(g.models || [], mList);
+          const remapped = canonicalizeModelsKeepingUnknown(g.models || [], mList);
           if (remapped.join("|") === (g.models || []).join("|")) return g;
           changed = true;
           return { ...g, models: remapped };
@@ -820,20 +822,24 @@ export default function AdminTemplateProducts() {
     );
     if (brandModels.length > 0 && activeGroup?.models?.length > 0) {
       const remapped = remapModelsToCatalog(activeGroup.models, brandModels);
-      const invalid = (activeGroup.models || []).filter(
-        (m) => !remapped.some((r) => normalizeModelKey(r) === normalizeModelKey(m))
-      );
-      if (invalid.length > 0) {
-        toast.error(`The following models are not valid for ${activeBrandName}: ${invalid.join(", ")}`);
-        return;
-      }
-      // Persist canonical catalog names (e.g. "Pixel 7a" → "Pixel 7 a") before save.
-      if (remapped.join("|") !== (activeGroup.models || []).join("|")) {
-        const nextCompat = (form.compatibility || []).map((g) =>
-          g.brand.toLowerCase() === activeBrandName.toLowerCase()
-            ? { ...g, models: remapped }
-            : g
-        );
+      const invalid = findInvalidSelectedModels(activeGroup.models, brandModels);
+      // Auto-strip obsolete models for the active brand; backend also strips other brands.
+      if (invalid.length > 0 || remapped.join("|") !== (activeGroup.models || []).join("|")) {
+        const nextCompat = (form.compatibility || [])
+          .map((g) =>
+            g.brand.toLowerCase() === activeBrandName.toLowerCase()
+              ? { ...g, models: remapped }
+              : g
+          )
+          .filter((g) => (g.models || []).length > 0);
+        if (nextCompat.length === 0 || remapped.length === 0) {
+          toast.error(
+            invalid.length > 0
+              ? `Remove invalid models before saving: ${invalid.join(", ")}`
+              : "Please select at least one supported phone model"
+          );
+          return;
+        }
         const allModels = [...new Set(nextCompat.flatMap((g) => g.models || []))];
         formForSave = {
           ...form,
@@ -842,6 +848,9 @@ export default function AdminTemplateProducts() {
           variant_inventory: syncVariantRows(allModels, form.variant_inventory, form.stock),
         };
         setForm(formForSave);
+        if (invalid.length > 0) {
+          toast.message(`Removed ${invalid.length} obsolete model(s) no longer in the catalog`);
+        }
       }
     }
     setSaving(true);
@@ -1649,7 +1658,32 @@ export default function AdminTemplateProducts() {
                                   Linked
                                 </span>
                               )}
+                              {(item.materials_count > 1 || (item.material_case_types || []).length > 1) && (
+                                <span
+                                  className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/60"
+                                  title={(item.material_case_types || []).map((s) => caseTypeLabel(s) || s).join(", ")}
+                                >
+                                  {item.materials_count || item.material_case_types.length} materials
+                                </span>
+                              )}
                             </div>
+                            {(item.material_case_types || []).length > 1 && (
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {item.material_case_types.slice(0, 4).map((slug) => (
+                                  <span
+                                    key={slug}
+                                    className="text-[9px] px-1.5 py-0.5 rounded border border-white/10 text-white/50 capitalize"
+                                  >
+                                    {caseTypeLabel(slug) || slug}
+                                  </span>
+                                ))}
+                                {item.material_case_types.length > 4 && (
+                                  <span className="text-[9px] text-white/35">
+                                    +{item.material_case_types.length - 4}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1998,6 +2032,11 @@ export default function AdminTemplateProducts() {
                         {item.design_id && (
                           <span className="text-[9px] font-mono uppercase tracking-wider text-brand bg-brand/10 border border-brand/20 px-1 py-0.2 rounded">
                             Linked
+                          </span>
+                        )}
+                        {(item.materials_count > 1 || (item.material_case_types || []).length > 1) && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/60">
+                            {item.materials_count || item.material_case_types.length} materials
                           </span>
                         )}
                       </div>

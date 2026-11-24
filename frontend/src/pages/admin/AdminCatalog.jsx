@@ -9,12 +9,36 @@ const PRODUCT_IMAGE_SIZE = "400 × 400 px";
 
 const EMPTY_BRAND = { name: "" };
 const EMPTY_MODEL = { name: "", case_types: [] };
-const EMPTY_PRODUCT = { name: "", description: "", is_active: true };
+const EMPTY_PRODUCT = { name: "", description: "", is_active: true, default_price: "" };
+
+function formatDefaultPrice(value) {
+  if (value == null || value === "") return "";
+  const num = Number(value);
+  return Number.isFinite(num) ? String(num) : "";
+}
+
+function resolveProductDefaultPrice(product, shopCaseTypes = []) {
+  const fromProduct = formatDefaultPrice(product?.default_price);
+  if (fromProduct !== "") return fromProduct;
+
+  const name = String(product?.name || "").trim().toLowerCase();
+  const slug = String(product?.slug || "").trim().toLowerCase().replace(/-case$/, "");
+  const match = shopCaseTypes.find((ct) => {
+    const ctName = String(ct.name || "").trim().toLowerCase();
+    const ctSlug = String(ct.slug || "").trim().toLowerCase();
+    return (name && ctName === name)
+      || (slug && ctSlug === slug)
+      || (name && ctSlug === name.replace(/\s+/g, "-"))
+      || (slug && ctName === slug.replace(/-/g, " "));
+  });
+  return formatDefaultPrice(match?.default_price);
+}
 
 export default function AdminCatalog() {
   const [brands, setBrands] = useState([]);
   const [models, setModels] = useState([]);
   const [products, setProducts] = useState([]);
+  const [shopCaseTypes, setShopCaseTypes] = useState([]);
   const [selectedBrand, setSelectedBrand] = useState(null);
   const [modal, setModal] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -27,9 +51,14 @@ export default function AdminCatalog() {
   const fileRef = useRef(null);
 
   const loadAll = useCallback(async () => {
-    const [b, p] = await Promise.all([api.get("/brands"), api.get("/admin/products")]);
+    const [b, p, ct] = await Promise.all([
+      api.get("/brands"),
+      api.get("/admin/products"),
+      api.get("/case-types").catch(() => ({ data: [] })),
+    ]);
     setBrands(b.data);
     setProducts(p.data);
+    setShopCaseTypes(Array.isArray(ct.data) ? ct.data : []);
     setSelectedBrand((prev) => {
       if (!prev) return prev;
       const match = b.data.find((x) => x.id === prev.id);
@@ -88,6 +117,7 @@ export default function AdminCatalog() {
             name: item.name,
             description: item.description || "",
             is_active: item.is_active !== false,
+            default_price: formatDefaultPrice(item.default_price),
           }
         : EMPTY_PRODUCT);
       setPreview(item?.image_url ? resolveMediaUrl(item.image_url) : null);
@@ -109,11 +139,17 @@ export default function AdminCatalog() {
     setForm((current) => {
       const configured = current.case_types || [];
       const exists = configured.some((item) => item.case_type_id === caseTypeId);
+      if (exists) {
+        return {
+          ...current,
+          case_types: configured.filter((item) => item.case_type_id !== caseTypeId),
+        };
+      }
+      const product = products.find((item) => item.id === caseTypeId);
+      const price = resolveProductDefaultPrice(product, shopCaseTypes);
       return {
         ...current,
-        case_types: exists
-          ? configured.filter((item) => item.case_type_id !== caseTypeId)
-          : [...configured, { case_type_id: caseTypeId, price: "", status: true }],
+        case_types: [...configured, { case_type_id: caseTypeId, price, status: true }],
       };
     });
   };
@@ -192,6 +228,7 @@ export default function AdminCatalog() {
         fd.append("name", name);
         fd.append("description", description);
         fd.append("is_active", String(form.is_active !== false));
+        fd.append("default_price", form.default_price === "" || form.default_price == null ? "" : String(form.default_price));
         if (file) fd.append("file", file);
         if (editing) {
           await api.patch(`/products/${editing.id}`, fd, {
@@ -462,6 +499,15 @@ export default function AdminCatalog() {
                     className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-brand resize-none"
                   />
                 </div>
+                <Field
+                  label="Default Price (₹) (optional)"
+                  type="number"
+                  value={form.default_price}
+                  onChange={(v) => set("default_price", v)}
+                  placeholder="e.g. 499"
+                  min="0"
+                  step="0.01"
+                />
                 <label className="flex items-center justify-between gap-4 rounded-lg border border-white/10 px-4 py-3">
                   <div>
                     <div className="text-sm font-medium">Active</div>

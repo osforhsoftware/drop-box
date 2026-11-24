@@ -14,9 +14,8 @@ export const TEMPLATE_COLLECTIONS = [
   "Essentials", "Limited Edition", "Artist Series", "Seasonal", "Collab",
 ];
 
-export const TEMPLATE_PHONE_BRANDS = [
-  "Apple", "Akkukkaa", "Samsung", "OnePlus", "Vivo", "Oppo", "Xiaomi", "Google",
-];
+/** @deprecated Prefer live GET /brands from /admin/catalog. Kept for rare admin fallbacks. */
+export const TEMPLATE_PHONE_BRANDS = [];
 
 export const TEMPLATE_PRODUCT_TYPES = [
   { slug: "customized", label: "Customized Phone Case" },
@@ -126,6 +125,29 @@ export function remapModelsToCatalog(selectedNames = [], catalogModels = []) {
     next.push(resolved);
   }
   return next;
+}
+
+/** Remap known models; keep unknown (legacy/removed) names so the UI can flag them. */
+export function canonicalizeModelsKeepingUnknown(selectedNames = [], catalogModels = []) {
+  const next = [];
+  const seen = new Set();
+  for (const raw of selectedNames || []) {
+    const resolved = resolveCatalogModelName(raw, catalogModels);
+    const name = resolved || String(raw || "").trim();
+    if (!name) continue;
+    const key = normalizeModelKey(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push(name);
+  }
+  return next;
+}
+
+/** Names in the selection that are not present in the live brand catalog. */
+export function findInvalidSelectedModels(selectedNames = [], catalogModels = []) {
+  return (selectedNames || []).filter(
+    (name) => !resolveCatalogModelName(name, catalogModels)
+  );
 }
 
 export function matchesTemplate(p, caseType) {

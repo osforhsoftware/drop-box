@@ -6,6 +6,7 @@ import {
   normalizeModelKey,
   remapModelsToCatalog,
   resolveCatalogModelName,
+  findInvalidSelectedModels,
 } from "../../constants/templateProducts";
 
 /**
@@ -68,6 +69,16 @@ export default function ModelMultiSelect({
     () => (models || []).filter((m) => String(m?.name || "").trim()),
     [models]
   );
+
+  const invalidSelected = useMemo(
+    () => (loading ? [] : findInvalidSelectedModels(value || [], catalogModels)),
+    [value, catalogModels, loading]
+  );
+  const invalidSet = useMemo(
+    () => new Set(invalidSelected.map((m) => normalizeModelKey(m))),
+    [invalidSelected]
+  );
+  const validSelectedCount = Math.max(0, (value || []).length - invalidSelected.length);
 
   const filteredModels = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -193,7 +204,8 @@ export default function ModelMultiSelect({
             </button>
           )}
           <span className="text-[11px] font-mono text-brand bg-brand/10 border border-brand/20 px-2 py-0.5 rounded-full whitespace-nowrap">
-            {remapModelsToCatalog(value || [], catalogModels).length} of {catalogModels.length} selected
+            {validSelectedCount} of {catalogModels.length} selected
+            {invalidSelected.length > 0 ? ` · ${invalidSelected.length} invalid` : ""}
           </span>
         </div>
       </div>
@@ -274,7 +286,7 @@ export default function ModelMultiSelect({
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-[11px] font-mono text-white/50 bg-white/5 px-2 py-0.5 rounded">
-              {remapModelsToCatalog(value || [], catalogModels).length}/{catalogModels.length}
+              {validSelectedCount}/{catalogModels.length}
             </span>
             {isOpen ? (
               <ChevronUp className="w-4 h-4 text-white/60" />
@@ -415,32 +427,68 @@ export default function ModelMultiSelect({
               <Smartphone className="w-3 h-3 text-brand" />
               Selected models ({value.length}):
             </span>
-            <button
-              type="button"
-              onClick={() => onChange([])}
-              className="text-[11px] text-red-400 hover:text-red-300 underline"
-            >
-              Clear all
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 rounded-xl border border-white/10 bg-white/[0.02] custom-scrollbar">
-            {value.map((m) => (
-              <span
-                key={m}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-brand/10 border border-brand/30 text-brand group transition-colors hover:border-brand/60"
-              >
-                <span>{m}</span>
+            <div className="flex items-center gap-2">
+              {invalidSelected.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => toggleModel(m)}
-                  className="hover:text-white ml-0.5 rounded-full p-0.5 hover:bg-brand/20 transition-colors"
-                  title={`Remove ${m}`}
-                  aria-label={`Remove ${m}`}
+                  onClick={() =>
+                    onChange(
+                      (value || []).filter((m) => !invalidSet.has(normalizeModelKey(m)))
+                    )
+                  }
+                  className="text-[11px] text-red-300 hover:text-red-200 underline"
+                  data-testid="remove-invalid-models"
                 >
-                  <X className="w-3 h-3" />
+                  Remove {invalidSelected.length} invalid
                 </button>
-              </span>
-            ))}
+              )}
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="text-[11px] text-red-400 hover:text-red-300 underline"
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+          {invalidSelected.length > 0 && (
+            <p className="text-[11px] text-red-300/90">
+              Red chips are models no longer in the {brandName} catalog — click × to remove, or save to auto-strip them.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 rounded-xl border border-white/10 bg-white/[0.02] custom-scrollbar">
+            {value.map((m) => {
+              const isInvalid = invalidSet.has(normalizeModelKey(m));
+              return (
+                <span
+                  key={m}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium group transition-colors ${
+                    isInvalid
+                      ? "bg-red-500/15 border border-red-500/50 text-red-300 hover:border-red-400"
+                      : "bg-brand/10 border border-brand/30 text-brand hover:border-brand/60"
+                  }`}
+                  title={isInvalid ? `${m} is not in the active catalog` : m}
+                  data-invalid={isInvalid ? "true" : undefined}
+                >
+                  <span>{m}</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChange((value || []).filter((x) => normalizeModelKey(x) !== normalizeModelKey(m)))
+                    }
+                    className={`ml-0.5 rounded-full p-0.5 transition-colors ${
+                      isInvalid
+                        ? "hover:text-white hover:bg-red-500/30"
+                        : "hover:text-white hover:bg-brand/20"
+                    }`}
+                    title={`Remove ${m}`}
+                    aria-label={`Remove ${m}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              );
+            })}
           </div>
         </div>
       ) : (

@@ -271,6 +271,6 @@ export const FAQ_ITEMS = [
   },
   {
     question: "How do I contact support?",
-    answer: `Fastest response: Instagram DM at ${CONTACT.instagram.handle}. You can also use our Contact form or email ${CONTACT.email}. Include your order ID for order-related queries.`,
+    answer: `We're available ${CONTACT.supportHours}. Fastest response: WhatsApp or Instagram DM at ${CONTACT.instagram.handle}. You can also use our Contact form or email ${CONTACT.email}. Include your order ID for order-related queries.`,
   },
 ];

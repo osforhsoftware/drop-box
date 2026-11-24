@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowRight, Check, ShieldCheck, Sparkles, Truck } from "lucide-react";
 import { api, resolveMediaUrl } from "../lib/api";
+import { SHIPPING_INFO } from "../constants/company";
 
 export const DEFAULT_HERO_SLIDES = [
   {
@@ -233,7 +234,7 @@ export default function VideoHero({ content = HERO_CONTENT, slides: slidesProp }
         {[
           { icon: Sparkles, title: "Premium print", copy: "Vibrant 1200dpi UV finish" },
           { icon: ShieldCheck, title: "Everyday protection", copy: "Durable, scratch-resistant shell" },
-          { icon: Truck, title: "Pan-India delivery", copy: "Tracked shipping in 3–5 days" },
+          { icon: Truck, title: "Pan-India delivery", copy: SHIPPING_INFO.trackedNote },
         ].map(({ icon: Icon, title, copy }) => (
           <div key={title} className="hero-benefit">
             <span className="hero-benefit__icon"><Icon aria-hidden="true" /></span>

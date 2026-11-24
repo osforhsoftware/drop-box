@@ -35,13 +35,18 @@ export default function Checkout() {
 
   const draft = getDraft();
 
-  const [form, setForm] = useState({
-
-    customer_name: "", phone: "", email: "",
-    house_no_flat: "", building_name: "", street: "", landmark: "",
-    country: "", state: "", district: "", city_area: "", post_office: "",
-    pincode: "", notes: "",
-
+  const [form, setForm] = useState(() => {
+    const d = getDraft();
+    const fromItems = Array.isArray(d.items)
+      ? d.items.map((i) => String(i?.notes || "").trim()).filter(Boolean).join("\n")
+      : "";
+    const fromDraft = String(d.notes || "").trim();
+    return {
+      customer_name: "", phone: "", email: "",
+      house_no_flat: "", building_name: "", street: "", landmark: "",
+      country: "", state: "", district: "", city_area: "", post_office: "",
+      pincode: "", notes: fromDraft || fromItems || "",
+    };
   });
 
   const [fieldErrors, setFieldErrors] = useState({});
@@ -379,9 +384,13 @@ export default function Checkout() {
             errors={fieldErrors}
           />
 
-          <Field label="Order notes (optional)" testid="checkout-notes"
-
-            value={form.notes} onChange={(v) => set("notes", v)} textarea />
+          <Field
+            label="Additional message / special instructions (optional)"
+            testid="checkout-notes"
+            value={form.notes}
+            onChange={(v) => set("notes", v)}
+            textarea
+          />
 
           <button data-testid="place-order-btn"
 

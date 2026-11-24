@@ -99,6 +99,9 @@ export default function Footer() {
               <Mail className="w-4 h-4 text-white shrink-0" />
               <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>
             </li>
+            <li className="text-white/55 text-xs pt-0.5">
+              {CONTACT.supportHours}
+            </li>
             <li className="flex items-center gap-2 pt-1">
               <Instagram className="w-4 h-4 text-white shrink-0" />
               <a href={CONTACT.instagram.url} target="_blank" rel="noreferrer">

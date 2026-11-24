@@ -3,7 +3,7 @@ import { api, resolveMediaUrl } from "../../lib/api";
 import { Plus, Trash2, X, Pencil, Upload, ImageIcon } from "lucide-react";
 
 const IMAGE_SIZE = "400 × 400 px";
-const EMPTY_ITEM = { name: "", slug: "", link: "", order: "0" };
+const EMPTY_ITEM = { name: "", slug: "", link: "", order: "0", default_price: "" };
 
 export default function AdminCaseTypes() {
   const [items, setItems] = useState([]);
@@ -15,12 +15,17 @@ export default function AdminCaseTypes() {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [brokenImageIds, setBrokenImageIds] = useState(() => new Set());
   const fileRef = useRef(null);
 
   const loadAll = useCallback(async () => {
     try {
-      const res = await api.get("/case-types");
-      setItems(res.data);
+      const res = await api.get("/case-types", {
+        headers: { "Cache-Control": "no-cache" },
+        params: { _ts: Date.now() },
+      });
+      setItems(Array.isArray(res.data) ? res.data : []);
+      setBrokenImageIds(new Set());
     } catch (e) {
       console.error(e);
     }
@@ -52,7 +57,13 @@ export default function AdminCaseTypes() {
     setModal(true);
     resetFile();
     if (item) {
-      setForm({ name: item.name, slug: item.slug || "", link: item.link || "", order: String(item.order || 0) });
+      setForm({
+        name: item.name,
+        slug: item.slug || "",
+        link: item.link || "",
+        order: String(item.order || 0),
+        default_price: item.default_price != null && item.default_price !== "" ? String(item.default_price) : "",
+      });
       setPreview(item.image ? resolveMediaUrl(item.image) : null);
     } else {
       setForm(EMPTY_ITEM);
@@ -89,6 +100,7 @@ export default function AdminCaseTypes() {
       if (form.slug) fd.append("slug", form.slug.trim());
       if (form.link) fd.append("link", form.link.trim());
       fd.append("order", form.order || "0");
+      fd.append("default_price", form.default_price === "" || form.default_price == null ? "" : String(form.default_price));
       if (file) fd.append("file", file);
       
       if (editing) {
@@ -142,8 +154,19 @@ export default function AdminCaseTypes() {
             <div key={item.id} className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-white/[0.04] gap-4 bg-white/[0.02]">
               <div className="flex items-center gap-4 min-w-0">
                 <div className="w-12 h-12 rounded-lg bg-white overflow-hidden shrink-0 flex items-center justify-center p-1">
-                  {item.image ? (
-                    <img src={resolveMediaUrl(item.image)} alt={item.name} className="w-full h-full object-contain drop-shadow-sm" />
+                  {item.image && !brokenImageIds.has(item.id) ? (
+                    <img
+                      src={resolveMediaUrl(item.image)}
+                      alt={item.name}
+                      className="w-full h-full object-contain drop-shadow-sm"
+                      onError={() =>
+                        setBrokenImageIds((prev) => {
+                          const next = new Set(prev);
+                          next.add(item.id);
+                          return next;
+                        })
+                      }
+                    />
                   ) : (
                     <ImageIcon className="w-6 h-6 text-black/20" />
                   )}
@@ -151,6 +174,11 @@ export default function AdminCaseTypes() {
                 <div className="min-w-0">
                   <div className="text-sm font-medium">{item.name}</div>
                   <div className="text-xs text-white/40 font-mono mt-0.5">{item.slug} • Order: {item.order}</div>
+                  {(!item.image || brokenImageIds.has(item.id)) && (
+                    <div className="text-[11px] text-amber-300/90 mt-0.5">
+                      {brokenImageIds.has(item.id) ? "Broken image — re-upload required" : "No image — hidden on storefront"}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -184,6 +212,15 @@ export default function AdminCaseTypes() {
             <Field label="Slug (optional)" value={form.slug} onChange={(v) => set("slug", v)} placeholder="e.g. transparent" />
             <Field label="Link (optional)" value={form.link} onChange={(v) => set("link", v)} placeholder="e.g. /shop?case_type=transparent" />
             <Field label="Display Order" type="number" value={form.order} onChange={(v) => set("order", v)} placeholder="0" />
+            <Field
+              label="Default Price (₹) (optional)"
+              type="number"
+              value={form.default_price}
+              onChange={(v) => set("default_price", v)}
+              placeholder="e.g. 499"
+              min="0"
+              step="0.01"
+            />
 
             <ImageUploadField
               label="Type Image"
@@ -216,7 +253,9 @@ export default function AdminCaseTypes() {
             className="glass rounded-2xl p-6 w-full max-w-sm space-y-5"
           >
             <h2 className="font-display text-xl">Confirm delete</h2>
-            <p className="text-white/70 text-sm">Delete "{confirmDelete.name}"?</p>
+            <p className="text-white/70 text-sm">
+              Delete &ldquo;{confirmDelete.name}&rdquo;? It will be removed from Shop by Category immediately and will not come back after a server restart.
+            </p>
             <div className="flex gap-3">
               <button type="button" onClick={() => setConfirmDelete(null)} className="flex-1 px-4 py-3 rounded-lg border border-white/10 text-white/70 hover:bg-white/[0.04]">
                 Cancel
@@ -271,7 +310,7 @@ function ImageUploadField({ label, sizeHint, maxHint, preview, fileRef, onFileCh
   );
 }
 
-function Field({ label, value, onChange, type = "text", placeholder, required, autoFocus }) {
+function Field({ label, value, onChange, type = "text", placeholder, required, min, step, autoFocus }) {
   return (
     <div>
       <label className="label-eyebrow block mb-2">{label}</label>
@@ -281,6 +320,8 @@ function Field({ label, value, onChange, type = "text", placeholder, required, a
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
+        min={min}
+        step={step}
         autoFocus={autoFocus}
         className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-1 focus:ring-brand"
       />
