@@ -48,10 +48,19 @@ export async function resolveCatalogForTemplate(template) {
     params: { brand_id: brand.id, model_id: model.id },
   });
   const caseKey = String(template.case_type || "").replace(/-case$/, "");
-  const product =
+  const matchedProduct =
     productsRes.data.find((p) => p.slug === template.case_type)
-    || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === caseKey)
-    || productsRes.data[0];
+    || productsRes.data.find((p) => String(p.slug || "").replace(/-case$/, "") === caseKey);
+  const product = matchedProduct || (
+    template.case_type
+      ? {
+          id: template.id || template.case_type,
+          name: template.case_type_label || template.material || template.title || "Phone Case",
+          slug: template.case_type,
+          material: template.material || null,
+        }
+      : productsRes.data[0]
+  );
   if (!product) throw new Error("No products available");
   return { brand, model, product };
 }

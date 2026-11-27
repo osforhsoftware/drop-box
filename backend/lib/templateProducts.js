@@ -86,7 +86,7 @@ function parseTags(raw) {
 }
 
 function parsePhoneModels(raw) {
-  if (Array.isArray(raw)) return raw.map((m) => String(m).trim()).filter(Boolean).slice(0, 50);
+  if (Array.isArray(raw)) return raw.map((m) => String(m).trim()).filter(Boolean);
   if (typeof raw === "string") {
     try {
       const parsed = JSON.parse(raw);
@@ -94,7 +94,7 @@ function parsePhoneModels(raw) {
     } catch {
       /* fall through */
     }
-    return raw.split(",").map((m) => m.trim()).filter(Boolean).slice(0, 50);
+    return raw.split(",").map((m) => m.trim()).filter(Boolean);
   }
   return [];
 }

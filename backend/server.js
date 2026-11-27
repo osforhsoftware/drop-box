@@ -552,6 +552,14 @@ async function resolveCatalogLine(line) {
       if (matchingProduct) {
         product = matchingProduct;
         isDirectMatch = true;
+      } else if (line.template_product_id && templateProduct.case_type) {
+        product = {
+          id: templateProduct.case_type || "default",
+          name: templateProduct.case_type_label || humanizeCaseType(templateProduct.case_type) || "Phone Case",
+          slug: templateProduct.case_type || "custom",
+          material: templateProduct.material || null,
+        };
+        isDirectMatch = true;
       } else if (!line.template_product_id && templateProduct.design_id) {
         // Fallback only when template_product_id was not explicitly specified: resolve to sibling
         const sibling = await db.collection("template_products").findOne(
@@ -865,7 +873,7 @@ function afterDiskUpload(req, res, next) {
     .then(() => next())
     .catch(async (err) => {
       await Promise.all(listUploadedFiles(req).map((file) => (
-        file?.path ? fs.promises.unlink(file.path).catch(() => {}) : null
+        file?.path ? fs.promises.unlink(file.path).catch(() => { }) : null
       )));
       if (err instanceof ImageInputError) {
         return res.status(400).json({ detail: err.message });
@@ -2317,7 +2325,7 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
       height: dims.canvas_height,
     });
     if (overlay.error) {
-      await fs.promises.unlink(req.file.path).catch(() => {});
+      await fs.promises.unlink(req.file.path).catch(() => { });
       return res.status(400).json({ detail: overlay.error });
     }
   }
@@ -2325,10 +2333,10 @@ api.post("/admin/templates", getCurrentAdmin, handleTemplateUpload, async (req, 
   const existing = isDefault
     ? await db.collection("templates").findOne({ is_default: true })
     : await db.collection("templates").findOne({
-        model_id,
-        case_type_slug,
-        is_default: { $ne: true },
-      });
+      model_id,
+      case_type_slug,
+      is_default: { $ne: true },
+    });
   const ts = nowIso();
   const zoneFields = {
     print_area: printAreaResult.print_area,
@@ -3856,9 +3864,9 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
 
   const defaultMat = String(req.body?.material || "").trim() || (
     case_type.includes("silicone") ? "Liquid Silicone" :
-    case_type.includes("transparent") ? "Polycarbonate" :
-    case_type.includes("glass") ? "Tempered Glass" :
-    case_type.includes("matte") ? "Matte Polycarbonate" : ""
+      case_type.includes("transparent") ? "Polycarbonate" :
+        case_type.includes("glass") ? "Tempered Glass" :
+          case_type.includes("matte") ? "Matte Polycarbonate" : ""
   );
   const item = {
     id: crypto.randomUUID(),
@@ -4437,7 +4445,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
   }
 
   const subtotal = pricedOrder.subtotal;
-    
+
   let amount = subtotal;
   let promoFields = {
     promo_code: null,
@@ -4557,7 +4565,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
               outputPath: printPath,
             });
             const print_url = `/uploads/prints/${printName}`;
-            
+
             // Update the specific item in the array
             await db.collection("orders").updateOne(
               { id: order.id },

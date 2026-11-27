@@ -277,4 +277,25 @@ test("catalogCompatibility: parseFormFields validates brand and models against c
     assert.deepEqual(parsed.compatibility[0].models, ["Galaxy S24 Ultra", "Galaxy S25"]);
     assert.equal(parsed.phone_brand, "Samsung");
   });
+
+  await t.test("preserves more than 50 compatible models per brand without truncating", () => {
+    const manyModels = Array.from({ length: 143 }, (_, idx) => `Galaxy M${idx + 1}`);
+    const parsed = parseFormFields(
+      {
+        title: "Large Brand Compatibility",
+        compatibility: JSON.stringify([{ brand: "Samsung", models: manyModels }]),
+        case_type: "matte",
+        price: "359",
+      },
+      {
+        allowedBrands: [{ id: "brand-samsung", name: "Samsung", slug: "samsung" }],
+        allowedModels: manyModels.map((name, idx) => ({ id: `m-${idx}`, name, brand_id: "brand-samsung" })),
+      }
+    );
+
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.compatibility.length, 1);
+    assert.equal(parsed.compatibility[0].models.length, 143);
+    assert.equal(parsed.phone_models.length, 143);
+  });
 });
