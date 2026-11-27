@@ -390,3 +390,12 @@ test("pickCanonical ignores out-of-stock default variant in favor of available v
   const picked = pickCanonical([matte, glass]);
   assert.equal(picked.id, "prod-matte");
 });
+
+test("humanizeCaseType is exported from both designGroup and templateProducts and formats gloss-shell-case", () => {
+  const { humanizeCaseType: fromDesignGroup } = require("./designGroup");
+  const { humanizeCaseType: fromTemplateProducts } = require("./templateProducts");
+  assert.equal(fromDesignGroup("gloss-shell-case"), "Gloss Shell Case");
+  assert.equal(fromDesignGroup("gloss-shell"), "Gloss Shell Case");
+  assert.equal(fromTemplateProducts("gloss-shell-case"), "Gloss Shell Case");
+  assert.equal(fromTemplateProducts("gloss-shell"), "Gloss Shell Case");
+});

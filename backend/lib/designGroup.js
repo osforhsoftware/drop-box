@@ -250,6 +250,7 @@ module.exports = {
   pickCanonical,
   startingPriceForMembers,
   groupProductsForListing,
+  humanizeCaseType,
   caseTypeLabelFromMap,
   toPublicMaterialVariant,
   toPublicListingProduct,

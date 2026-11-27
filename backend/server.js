@@ -60,6 +60,7 @@ const {
   toRelativeMediaUrl,
   toPublicProduct,
   displayTemplateTitle,
+  humanizeCaseType,
   getUpdatedTemplateTitle,
   stripCopyTitleSuffix,
   stripCopySlugSuffix,
@@ -77,6 +78,7 @@ const {
   COLLECTIONS,
   PRODUCT_TYPES,
   CASE_TYPE_ALIASES,
+  parsePhoneModels,
   normalizeModelKey,
   resolveCatalogModelName,
 } = require("./lib/templateProducts");
@@ -421,6 +423,38 @@ async function validatePromoCode(code, subtotal) {
   return { promo, discount_amount, final_amount };
 }
 
+async function synthesizeProductFromTemplate(templateProduct, line) {
+  const rawCase = String(templateProduct?.case_type || "").trim();
+  const tCase = rawCase.toLowerCase();
+  const slugCandidates = [
+    ...new Set([
+      ...(CASE_TYPE_ALIASES[tCase] || []),
+      tCase,
+      tCase ? `${tCase}-case` : "",
+      tCase.replace(/-case$/, ""),
+    ].filter(Boolean)),
+  ];
+  const caseTypeDoc = slugCandidates.length > 0
+    ? await db.collection("case_types").findOne({
+        is_deleted: { $ne: true },
+        slug: { $in: slugCandidates },
+      })
+    : null;
+  const resolvedName =
+    String(caseTypeDoc?.name || "").trim()
+    || String(templateProduct?.case_type_label || "").trim()
+    || String(line?.case_type_label || "").trim()
+    || humanizeCaseType(rawCase)
+    || "Phone Case";
+
+  return {
+    id: rawCase || "default",
+    name: resolvedName,
+    slug: rawCase || "custom",
+    material: templateProduct?.material || null,
+  };
+}
+
 async function resolveCatalogLine(line) {
   const brandId = String(line?.brand_id || "").trim();
   const modelId = String(line?.model_id || "").trim();
@@ -472,11 +506,7 @@ async function resolveCatalogLine(line) {
 
   if (!product) {
     if (templateProduct) {
-      product = {
-        id: templateProduct.case_type || "default",
-        name: templateProduct.case_type_label || humanizeCaseType(templateProduct.case_type) || "Phone Case",
-        slug: templateProduct.case_type || "custom",
-      };
+      product = await synthesizeProductFromTemplate(templateProduct, line);
     } else {
       const err = new Error("Case type not found");
       err.status = 404;
@@ -553,12 +583,7 @@ async function resolveCatalogLine(line) {
         product = matchingProduct;
         isDirectMatch = true;
       } else if (line.template_product_id && templateProduct.case_type) {
-        product = {
-          id: templateProduct.case_type || "default",
-          name: templateProduct.case_type_label || humanizeCaseType(templateProduct.case_type) || "Phone Case",
-          slug: templateProduct.case_type || "custom",
-          material: templateProduct.material || null,
-        };
+        product = await synthesizeProductFromTemplate(templateProduct, line);
         isDirectMatch = true;
       } else if (!line.template_product_id && templateProduct.design_id) {
         // Fallback only when template_product_id was not explicitly specified: resolve to sibling
@@ -3831,6 +3856,7 @@ api.post("/admin/template-products/:id/material-variants", getCurrentAdmin, asyn
     ? Math.max(0, Math.floor(Number(stockOverride) || 0))
     : Math.max(0, Math.floor(Number(existing.stock) || 0));
 
+  let stock = initialStock;
   let variant_inventory = [];
   if (Array.isArray(req.body?.variant_inventory) && req.body.variant_inventory.length > 0) {
     const norm = normalizeVariantInventory(req.body.variant_inventory, targetModels, initialStock);
@@ -4547,7 +4573,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
       if (item.design_url && item.model_id && item.product_id) {
         try {
           const product = await db.collection("products").findOne({ id: item.product_id });
-          const caseTypeSlug = product?.slug;
+          const caseTypeSlug = product?.slug || item.case_type;
           const template = await resolvePrintTemplate({
             template_id: item.template_id,
             model_id: item.model_id,
@@ -4580,7 +4606,7 @@ api.post("/orders", orderRateLimiter, getCurrentUser, async (req, res) => {
   } else if (order.design_url && order.model_id && order.product_id) {
     try {
       const product = await db.collection("products").findOne({ id: order.product_id });
-      const caseTypeSlug = product?.slug;
+      const caseTypeSlug = product?.slug || order.case_type;
       const template = await resolvePrintTemplate({
         template_id: order.template_id,
         model_id: order.model_id,

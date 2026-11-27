@@ -1012,6 +1012,7 @@ module.exports = {
   trashedClause,
   publishedShopClause,
   displayTemplateTitle,
+  humanizeCaseType,
   getUpdatedTemplateTitle,
   stripCopyTitleSuffix,
   stripCopySlugSuffix,
